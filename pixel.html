@@ -101,6 +101,8 @@ const DB={db:null,
  get(k){return new Promise(res=>{if(!this.db)return res(null);const r=this.db.transaction('songs').objectStore('songs').get(k);r.onsuccess=()=>res(r.result||null);r.onerror=()=>res(null);})}};
 const songs=LEVELS.map(()=>null);
 const best=i=>+(localStorage['pixel_best_'+i]||0);
+const RANKS='CBAS',bestRank=i=>localStorage['pixel_rank_'+i]||'';
+const GRAZE_HEAL=10;
 
 // ---------- audio ----------
 // every sound goes through masterOut, so mute is one switch
@@ -485,14 +487,14 @@ function onBeat(i){
 function startLevel(li,song,L=LEVELS[li],from=0,test=false){
  G={li,L,song,beats:song.an.beats,bp:song.an.bp,dur:song.an.dur,bpm:song.an.bpm,t:from,bi:from?Math.max(0,song.an.beats.findIndex(b=>b.t>=from)):0,ev:[],haz:[],parts:[],
   seed:(typeof li==='number'?li*7919:[...String(li)].reduce((h,c)=>h*31+c.charCodeAt(0)|0,7))+Math.round(song.an.dur*1000),from,test,ctx:{s:1,n:0},rng:mulberry(1),D:L.D,S:L.S,C:L.C,pat:null,tier:'rest',bs:{k0:-1},lastAvg:0,
-  spin:0,shake:0,flash:0,hitFlash:0,pulse:0,trail:[],hist:[],graze:0,pull:null};
+  spin:0,shake:0,flash:0,hitFlash:0,pulse:0,trail:[],hist:[],graze:0,hits:0,healFx:0,pull:null};
  P={x:W/2,y:H-90,hp:L.hp||3,inv:0};
  boss={x:W/2,y:200,rot:0,pulse:0,z:0,tw:null,dead:false};
  msg=null;state='play';stopMenuMusic();playSong(song.buffer,from);
 }
 
 function hurt(src){if(P.inv>0||state!=='play')return;
- for(const b of G.haz)if(b.type==='bullet'&&(b.near||(src&&b.t0===src.t0)))b.nog=1;P.hp--;P.inv=1.6;G.shake=14;G.hitFlash=1;burst(P.x,P.y,'#ffffff',22);if(P.hp<=0)die();}
+ for(const b of G.haz)if(b.type==='bullet'&&(b.near||(src&&b.t0===src.t0)))b.nog=1;P.hp--;G.hits++;P.inv=1.6;G.shake=14;G.hitFlash=1;burst(P.x,P.y,'#ffffff',22);if(P.hp<=0)die();}
 function pct(){return Math.floor(clamp(G.t/G.dur)*100);}
 function saveBest(p){if(!G.test&&p>best(G.li))localStorage['pixel_best_'+G.li]=p;}
 function die(){
@@ -505,7 +507,9 @@ function die(){
 function win(){
  state='win';G.haz.forEach(h=>{if(h.x!=null)burst(h.x,h.y,G.L.color,3,150)});G.haz=[];G.ev=[];
  boss.dead=true;burst(boss.x,boss.y,G.L.color,120,500);burst(boss.x,boss.y,'#ffffff',60,350);G.shake=25;G.flash=1;saveBest(100);
- msg={at:performance.now()+1600,title:'LEVEL COMPLETE',sub:`${G.L.name} CORE DESTROYED  GRAZE ${G.graze}`,btns:[['AGAIN',retry],[G.test?'EDIT':'MENU',toMenu]]};
+ const rank=G.hits===0?(G.graze>=20?'S':'A'):G.hits<=2?'B':'C',prev=bestRank(G.li);
+ if(!G.test&&RANKS.indexOf(rank)>RANKS.indexOf(prev))localStorage['pixel_rank_'+G.li]=rank;
+ msg={at:performance.now()+1600,title:'RANK '+rank,sub:`CLEARED  GRAZE ${G.graze}  HITS ${G.hits}`,btns:[['AGAIN',retry],[G.test?'EDIT':'MENU',toMenu]]};
 }
 function retry(){ensureAudio();startLevel(G.li,G.song,G.L,G.from,G.test);}
 function toMenu(){const back=G&&G.L.custom?(G.test?'edit':'list'):null;stopSong();G=null;msg=null;if(actx&&actx.state==='suspended')actx.resume();
@@ -552,7 +556,7 @@ function update(dt){
     const d=Math.hypot(P.x-h.x,P.y-h.y);
     if(d<h.s*.4+PH){h.nog=1;hurt(h);}
     else if(d<h.s*.4+PH+22){if(P.inv<=0)h.near=1;}
-    else if(h.near){h.near=0;if(!h.nog&&!h.gz&&P.inv<=0){h.gz=1;G.graze++;G.parts.push({x:P.x,y:P.y,vx:(P.x-h.x)*4,vy:(P.y-h.y)*4,life:.35,s:4,c:'#ffffff'});}}
+    else if(h.near){h.near=0;if(!h.nog&&!h.gz&&P.inv<=0){h.gz=1;G.graze++;if(G.graze%GRAZE_HEAL===0&&P.hp<(G.L.hp||3)){P.hp++;G.healFx=1;burst(P.x,P.y,'#ffffff',14,200);burst(P.x,P.y,G.L.color,10,160);}G.parts.push({x:P.x,y:P.y,vx:(P.x-h.x)*4,vy:(P.y-h.y)*4,life:.35,s:4,c:'#ffffff'});}}
     break;}
    case'rect':if(t>=h.t0){h.x+=h.vx*dt;h.y+=h.vy*dt;if(inRect(h.x+3,h.y+3,h.w-6,h.h-6))hurt();
     if(t>h.t1||(t>h.t0+.3&&(h.x>W+100||h.x+h.w<-100||h.y>H+100||h.y+h.h<-100)))h.dead=1;}break;
@@ -645,8 +649,10 @@ function drawGame(dt){
  const bx=90,bw=140,prog=clamp(t/G.dur);
  ctx.fillStyle='#000000';ctx.fillRect(bx,4,bw,6);ctx.fillStyle=col;ctx.fillRect(bx+1,5,Math.round((bw-2)*(1-prog)),4);frame(bx,4,bw,6,'#ffffff');
  txt(trunc(`${L.name} - ${G.song.name}`,34),LW/2,13,L.light,1,1);
- for(let i=0;i<(L.hp||3);i++){ctx.fillStyle=i<P.hp?'#ffffff':L.dim;ctx.fillRect(4+i*9,4,7,7);}
- txt('GRAZE '+G.graze,4,14,L.dim);
+ for(let i=0;i<(L.hp||3);i++){ctx.fillStyle=i<P.hp?(G.healFx>.3&&i===P.hp-1?L.light:'#ffffff'):L.dim;ctx.fillRect(4+i*9,4,7,7);}
+ G.healFx=Math.max(0,G.healFx-dt*2);
+ const gw=txt('GRAZE '+G.graze,4,14,G.healFx>.3?'#ffffff':L.dim);
+ for(let i=0;i<GRAZE_HEAL-1;i++){ctx.fillStyle=i<G.graze%GRAZE_HEAL?L.light:L.dim;ctx.fillRect(4+gw+3+i*4,15,3,3);} // pips toward the next heal
  txt(pct()+'%',LW-4,4,'#ffffff',2,2);txt(G.bpm+' BPM',LW-4,16,L.dim,1,2);
  if(G.flash>.15){ctx.globalAlpha=G.flash*.4;ctx.fillStyle='#ffffff';ctx.fillRect(0,0,LW,LH);ctx.globalAlpha=1;}
  if(G.hitFlash>.5){ctx.fillStyle=L.light;ctx.fillRect(0,0,LW,2);ctx.fillRect(0,LH-2,LW,2);ctx.fillRect(0,0,2,LH);ctx.fillRect(LW-2,0,2,LH);}
@@ -680,7 +686,7 @@ function drawMenu(){
   if(sel===i){frame(x+2,y+2,w-4,h-4,Math.floor(t*4)%2?'#ffffff':L.color);}
   ctx.fillStyle=L.color;poly(shapePts(L,10,hov?t*1.5:0),x+16,y+17);ctx.fill();
   txt(L.name,x+30,y+7,L.color,2);txt(L.shape,x+30,y+20,'#ffffff');
-  txt('BEST '+best(i)+'%',x+6,y+31,best(i)>=100?L.color:'#ffffff');
+  txt('BEST '+best(i)+'%'+(bestRank(i)?'  RANK '+bestRank(i):''),x+6,y+31,best(i)>=100?L.color:'#ffffff');
   if(s)txt(trunc(s.name,19),x+6,y+40,L.color);
   if(s)btn(x+w-12,y+38,9,9,'X',L.color,()=>{songs[i]=null;DB.put(i,null);});
   btn(x+4,y+50,42,12,'SONG',L.color,()=>pickSong(i));
@@ -769,7 +775,7 @@ function drawEdList(t){
  if(!customLevels.length)txt('NO LEVELS YET - MAKE ONE!',LW/2,90,'#ffffff',1,1);
  customLevels.forEach((lv,i)=>{const y=24+i*24,co=ED_COLORS[lv.color].c;frame(4,y,312,21,co);
   ctx.fillStyle=co;poly(shapePts(SHAPES[lv.shape],7,t*(i%2?1:-1)),16,y+10);ctx.fill();
-  txt(trunc(lv.name,24),28,y+4,co);txt(trunc(songInfo(lv).name,18)+'   BEST '+best('c'+lv.id)+'%',28,y+12,'#ffffff');
+  txt(trunc(lv.name,24),28,y+4,co);txt(trunc(songInfo(lv).name,18)+'   BEST '+best('c'+lv.id)+'%'+(bestRank('c'+lv.id)?' RANK '+bestRank('c'+lv.id):''),28,y+12,'#ffffff');
   btn(196,y+5,36,12,'PLAY',co,()=>playCustom(lv,false));btn(236,y+5,36,12,'EDIT',co,()=>openEdit(lv));
   const sure=ED.del===lv.id;btn(276,y+5,36,12,sure?'SURE?':'DEL',sure?'#ff2a2a':co,()=>{if(sure)deleteLevel(lv);else ED.del=lv.id;});});
  if(customLevels.length<6)btn(LW/2-40,176,80,14,'+ NEW LEVEL','#ffffff',newLevel);}
