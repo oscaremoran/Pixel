@@ -599,6 +599,7 @@ function makeSfx(){
     const k=Math.min(5,Math.floor(x/.11)),f=[392,523.25,659.25,783.99,1046.5,1318.5][k],e=Math.exp(-(x-k*.11)*(k===5?2.2:6));
     return(((x*f)%1<.5?1:-1)*.16+Math.sin(TAU*f/2*x)*.2)*e;
   });
+  SFX.buzz=mk(.3,x=>((x*190)%1*2-1)*.16*(.6+.4*Math.sin(TAU*31*x))*Math.min(1,x*30,(.3-x)*30));
   SFX.click=mk(.035,x=>nrand()*.25*Math.exp(-x*180)+Math.sin(TAU*1200*x)*.2*Math.exp(-x*110));
   SFX.finale=mk(.9,x=>(nrand()*.3*Math.exp(-x*4)+Math.sin(TAU*(55+30*Math.exp(-x*6))*x)*.6*Math.exp(-x*3))*Math.min(1,x*40));
 }
@@ -1123,6 +1124,7 @@ function hurt(src){
   if(P.inv>0||state!=='play')return;
   sfx('hit');
   P.hp--;
+  if(G.L.onHurt)G.L.onHurt();
   G.lastHit=(src&&src.pat)||G.pat;
   P.inv=1.6;
   G.shake=14;
@@ -1162,7 +1164,7 @@ function die(){
   const hint=hb?['HIT BY: '+hb[0],hb[1]]:[];
   msg=G.practice
     ?{at:performance.now()+900,title:'YOU DIED',sub:`PRACTICE  ${G.L.name}  ${p}%`,lines:hint,btns:[['RETRY',retry],['BACK',toMenu]]}
-    :{at:performance.now()+900,title:'YOU DIED',sub:`${G.L.name}  ${p}%  BEST ${best(G.li)}%`,meter:{n:sk,prev:prevSk},lines:[...ul,...hint],btns:[['RETRY',retry],[backLabel(),toMenu]]};
+    :{at:performance.now()+900,title:'YOU DIED',sub:`${G.L.name}  ${p}%  BEST ${best(G.li)}%`,meter:{n:sk,prev:prevSk},lines:[...ul,...(G.L.deathLines||[]),...hint],btns:[['RETRY',retry],[backLabel(),toMenu]]};
 }
 function win(){
   state='win';
@@ -1183,8 +1185,8 @@ function win(){
     msg={at:performance.now()+1600,title:'CLEARED!',sub:'PRACTICE - NOTHING IS SAVED',btns:[['AGAIN',retry],['BACK',toMenu]]};
     return;
   }
-  msg={at:performance.now()+1600,title:G.L.tut?'TUTORIAL DONE':'CLEARED!',sub:G.L.tut?'SKILL = HOW FAR YOU GET + HOW FEW HITS':'',
-    meter:{n:sk,prev:prevSk},lines:ul,btns:G.L.tut?[['PLAY EASY',()=>{toMenu();playLevel(0);}],['MENU',toMenu]]:[['AGAIN',retry],[backLabel(),toMenu]]};
+  msg={at:performance.now()+1600,title:G.L.tut?'TUTORIAL DONE':'CLEARED!',sub:G.L.tut?'SKILL = HOW FAR YOU GET + HOW FEW HITS':G.L.winSub||'',
+    meter:{n:sk,prev:prevSk},lines:[...(G.L.winLines||[]),...ul],btns:G.L.tut?[['PLAY EASY',()=>{toMenu();playLevel(0);}],['MENU',toMenu]]:[['AGAIN',retry],[backLabel(),toMenu]]};
 }
 // where the result screen's second button goes: the editor for test runs, the practice list, or the menu
 const backLabel=()=>G.practice?'BACK':G.test?'EDIT':'MENU';
@@ -1201,6 +1203,7 @@ function retry(){
   startLevel(G.li,G.song,G.L,G.from,G.test,G.practice);
 }
 function toMenu(){
+  lastInput=performance.now();
   const back=G&&G.L.custom?(G.test?'edit':'list'):null,practiceLi=G&&G.practice?G.li:-1;
   stopSong();
   G=null;
@@ -1275,8 +1278,10 @@ function update(dt){
       G.parts.push({x:boss.x+Math.cos(a)*560,y:boss.y+Math.sin(a)*560,vx:-Math.cos(a)*900,vy:-Math.sin(a)*900,life:.9,s:4,c:G.L.mid});
     }
   }
-  P.x=clamp(P.x+mx*280*dt,10,W-10);
-  P.y=clamp(P.y+my*280*dt,10,H-10);
+  // fly paper (GARY) slows you to a third while you stand on it
+  const sticky=G.haz.some(h=>h.type==='paper'&&t>=h.t0&&P.x>h.x&&P.x<h.x+h.w&&P.y>h.y&&P.y<h.y+h.h),spd=sticky?280/3:280;
+  P.x=clamp(P.x+mx*spd*dt,10,W-10);
+  P.y=clamp(P.y+my*spd*dt,10,H-10);
   P.inv=Math.max(0,P.inv-dt);
   G.trail.push({x:P.x,y:P.y});
   if(G.trail.length>14)G.trail.shift();
@@ -1308,6 +1313,13 @@ function update(dt){
             h.vy=vx*sn+h.vy*c;
             h.curve*=1-dt*.45;
           }
+          if(h.fly){ // GARY's flies: turn toward you (limited), with a jittery wobble
+            const cur=Math.atan2(h.vy,h.vx),sp=Math.hypot(h.vx,h.vy);
+            const d=((Math.atan2(P.y-h.y,P.x-h.x)-cur)%TAU+3*Math.PI)%TAU-Math.PI;
+            const na=cur+clamp(d,-2.2*dt,2.2*dt)+Math.sin((t-h.t0)*14+h.ph)*5*dt;
+            h.vx=Math.cos(na)*sp;
+            h.vy=Math.sin(na)*sp;
+          }
           if(h.grav)h.vy+=h.grav*dt;
           if(h.drag){
             const f=Math.max(0,1-h.drag*dt);
@@ -1335,6 +1347,7 @@ function update(dt){
           break;
         }
         if(h.sink&&Math.hypot(h.x-boss.x,h.y-boss.y)<34){h.dead=1;break;}
+        if(h.die&&t>=h.die){h.dead=1;break;}
         if(h.cx!=null?h.r>900:(h.x<-60||h.x>W+60||h.y<-60||h.y>H+60)){h.dead=1;break;}
         const d=Math.hypot(P.x-h.x,P.y-h.y);
         if(d<h.s*.4+PH)hurt(h);
@@ -1376,7 +1389,8 @@ function update(dt){
         h.r=r;
         if(h.dmg&&r<h.rMax&&r>0){
           const rd=Math.abs(Math.hypot(P.x-h.x,P.y-h.y)-r);
-          if(rd<h.th/2+PH)hurt(h);
+          const inGap=h.gapW&&Math.abs(((Math.atan2(P.y-h.y,P.x-h.x)-h.gapA)%TAU+3*Math.PI)%TAU-Math.PI)<h.gapW;
+          if(rd<h.th/2+PH&&!inGap)hurt(h);
         }
         if(r>h.rMax+60||r<0)h.dead=1;
         break;
@@ -1410,7 +1424,7 @@ function update(dt){
       }
       case'ghost':if(t>h.t1)h.dead=1;
       break;
-      case'mark':case'dashwarn':if(t>h.t1)h.dead=1;
+      case'mark':case'dashwarn':case'paper':if(t>h.t1)h.dead=1;
       break;
       case'bomb':{
         const p=clamp((t-h.ts)/(h.te-h.ts)),e=1-Math.pow(1-p,3);
@@ -1460,13 +1474,14 @@ function draw(dt){
     else if(PR.on)drawPractice();
     else if(LK.on)drawLocker();
     else if(XT.on)drawExtras();
+    else if(LS.on)drawLevels();
     else drawMenu();
-    if(state==='loading')drawBox('LOADING',loadMsg,[],LEVELS[sel].color);
+    if(state==='loading'){ui=[];drawBox('LOADING',loadMsg,[],LEVELS[sel].color);} // nothing behind the box is clickable while a song composes
     if(modal){
       ui=[];
       drawBox(modal.title,modal.sub,modal.btns,modal.col||'#ffffff');
     }
-    posterize(ED.on&&ED.screen==='edit'&&ED.lv?edPal(ED.lv.color):MENU_PAL);
+    posterize(ED.on&&ED.screen!=='list'&&ED.lv?edPal(ED.lv.color):MENU_PAL);
     if(LK.on&&!modal)lockerPost();
     return;
   }
@@ -1475,6 +1490,7 @@ function draw(dt){
   const boxUp=msg&&performance.now()>=msg.at;
   if(boxUp)drawBox(msg.title,msg.sub,msg.btns,G.L.color,msg.lines,msg.meter);
   posterize(G.L.pal);
+  if(!boxUp&&G.L.drawPost)G.L.drawPost();
   if(!boxUp&&(state==='play'||state==='paused'))drawPlayerPost();
 }
 // ---- skins & trails: exact-colour pixel art, in real canvas pixels ----
@@ -1721,8 +1737,22 @@ function drawGame(dt){
       ctx.strokeStyle=!h.dmg?L.dim:past?L.dim:col;
       ctx.lineWidth=h.th;
       ctx.beginPath();
-      ctx.arc(h.x,h.y,h.r,0,TAU);
+      if(h.gapW)ctx.arc(h.x,h.y,h.r,h.gapA+h.gapW,h.gapA-h.gapW+TAU); // leave the gap open
+      else ctx.arc(h.x,h.y,h.r,0,TAU);
       ctx.stroke();
+    }else if(h.type=='paper'){ // fly paper: dashed outline first, then a striped sticky patch
+      if(t<h.t0){
+        ctx.strokeStyle=L.warnDim;
+        ctx.lineWidth=4;
+        ctx.setLineDash([14,10]);
+        ctx.strokeRect(h.x,h.y,h.w,h.h);
+        ctx.setLineDash([]);
+      }else{
+        ctx.fillStyle=L.warnDim;
+        rr(h.x,h.y,h.w,h.h);
+        ctx.fillStyle=L.dim;
+        for(let sx=-h.h;sx<h.w;sx+=24)for(let q=0;q<h.h;q+=6)rr(h.x+clamp(sx+q,0,h.w-6),h.y+q,6,6);
+      }
     }else if(h.type=='rect'&&t>=h.t0){
       ctx.fillStyle=col;
       rr(h.x,h.y,h.w,h.h);
@@ -1748,6 +1778,15 @@ function drawGame(dt){
   }
   for(const h of G.haz){
     if(h.type=='bullet'){
+      if(h.fly){ // a little fly: body plus flapping wings
+        const flap=Math.floor((t+h.ph)*30)%2;
+        ctx.fillStyle=L.light;
+        rr(h.x-8,h.y-5-(flap?3:0),6,3);
+        rr(h.x+2,h.y-5-(flap?3:0),6,3);
+        ctx.fillStyle=col;
+        rr(h.x-4,h.y-3,9,7);
+        continue;
+      }
       if(h.trail){
         const v=Math.hypot(h.vx,h.vy)||1;
         ctx.fillStyle=L.mid;
@@ -1848,6 +1887,14 @@ function drawGame(dt){
     if(T.ok)txt('NICE!',LW/2,80,'#ffffff',3,1);
     else if(T.again>performance.now())txt('TRY AGAIN',LW/2,80,L.warn,3,1);
   }
+  // speech bubble (GARY talks)
+  if(G.say&&t<G.say.until&&state==='play'){
+    const w=tw(G.say.text)+10,x=(LW-w)/2|0;
+    ctx.fillStyle='#000000';
+    ctx.fillRect(x,22,w,11);
+    frame(x,22,w,11,L.color);
+    txt(G.say.text,LW/2,25,'#ffffff',1,1);
+  }
   // first-time tip for a new attack
   if(G.tip&&G.tip.big&&t<G.tip.until){txt(G.tip.text,LW/2,60,blink?'#ffffff':L.warn,3,1);}
   if(G.flash>.15&&!calmFx){
@@ -1900,14 +1947,18 @@ function drawMenu(){
   const t=performance.now()/1000;
   ctx.fillStyle=MENU_BG;
   ctx.fillRect(0,0,LW,LH);
-  LEVELS.forEach((L,i)=>{
+  // SECRET: idle on the menu and the floating shapes drift together in front of everything (DRIFT)
+  const idle=menuIdle(),d=clamp((idle-15)/(MENU_IDLE_SECS-15)),e=d*d*(3-2*d);
+  const drifters=()=>LEVELS.forEach((L,i)=>{
     for(let j=0;j<2;j++){
-      const x=(i*90+j*170+t*(6+j*3))%(LW+60)-30,y=20+((i*3+j)*47)%160;
-      ctx.fillStyle=mix(MENU_BG,L.color,.3);
-      poly(shapePts(L,8+j*5,t*(.3+j*.2)*(i%2?1:-1)),x,y);
+      const x=(i*90+j*170+t*(6+j*3))%(LW+60)-30,y=20+((i*3+j)*47)%160,a=t*(2+4*e)+i+j*3,r=(1-e)*30+4;
+      ctx.fillStyle=d>0?mix(MENU_BG,L.color,.3+.7*e):mix(MENU_BG,L.color,.3);
+      poly(shapePts(L,8+j*5+e*4,t*(.3+j*.2+e*3)*(i%2?1:-1)),lerp(x,LW/2+Math.cos(a)*r,e),lerp(y,LH/2+Math.sin(a)*r*.6,e));
       ctx.fill();
     }
   });
+  if(d===0)drifters();
+  if(idle>=MENU_IDLE_SECS)playSecret('drift');
   // title
   const tx=LW/2-tw('PIXEL',4)/2,thov=mouse.x>=tx-2&&mouse.x<tx+tw('PIXEL',4)+2&&mouse.y>=3&&mouse.y<27;
   'PIXEL'.split('').forEach((c,i)=>{
@@ -1918,38 +1969,26 @@ function drawMenu(){
   ui.push({x:tx-2,y:3,w:tw('PIXEL',4)+4,h:24,fn:()=>playSecret('pixel')}); // SECRET: the title is a level
   if(firstVisit())txt('PRESS ANY KEY TO START',LW/2,28,Math.floor(t*3)%2?'#ffd23f':'#ffffff',1,1);
   else txt('DODGE THE CORE. SURVIVE THE SONG.',LW/2,28,'#ffffff',1,1);
-  LEVELS.forEach((L,i)=>{
-    const x=8+(i%3)*104,y=38+(i/3|0)*72,w=96,h=66;
-    const hov=mouse.x>=x&&mouse.x<x+w&&mouse.y>=y&&mouse.y<y+h;
-    if(hov)sel=i;
-    ctx.fillStyle='#000000';
-    ctx.fillRect(x,y,w,h);
-    if(!levelOpen(i)){
-      frame(x,y,w,h,'#3a3a4a');
-      if(hov)frame(x+2,y+2,w-4,h-4,Math.floor(t*4)%2?'#ffffff':'#3a3a4a');
-      ctx.fillStyle='#3a3a4a';
-      poly(shapePts(L,10,0),x+16,y+17);
-      ctx.fill();
-      txt(L.name,x+30,y+7,'#3a3a4a',2);
-      padlock(x+44,y+28,'#ffd23f');
-      txt(LEVEL_XP[i]+' XP TO UNLOCK',x+w/2,y+40,'#ffffff',1,1);
-      txt('YOU HAVE '+xpTotal(),x+w/2,y+50,'#3a3a4a',1,1);
-      ui.push({x,y,w,h,fn:()=>playLevel(i)});
-      return;
-    }
-    frame(x,y,w,h,L.color);
-    if(hov)frame(x+2,y+2,w-4,h-4,Math.floor(t*4)%2?'#ffffff':L.color);
-    ctx.fillStyle=L.color;
-    poly(shapePts(L,10,hov?t*1.5:0),x+16,y+17);
-    ctx.fill();
-    txt(L.name,x+30,y+7,L.color,2);
-    txt(L.shape,x+30,y+20,'#ffffff');
-    txt('BEST '+best(i)+'%'+(bestSkill(i)?'  SKILL '+bestSkill(i):''),x+6,y+31,best(i)>=100?L.color:'#ffffff');
-    txt(MUSIC[i].bpm+' BPM',x+6,y+40,L.dim);
-    btn(x+4,y+50,48,12,'PLAY',L.color,()=>playLevel(i));
-    btn(x+56,y+50,36,12,'PRACTICE',L.color,()=>openPractice(i));
-    ui.push({x,y,w,h,fn:()=>{sel=i;}});
-  }); // clicking a card's body selects it (and never counts as an empty-space click)
+  // GD style: a big PLAY button in the middle (it opens the level picker), the Locker to its left, the editor to its right
+  const cy=100,pulse=menuBeatPulse();
+  drawPlayBtn(LW/2,cy,pulse);
+  bigBtn(LW/2-72,cy,32,'#ffd23f',openLocker,0,(h,hov)=>{ // your square, with eyes
+    ctx.fillStyle=hov?'#000000':'#ffffff';
+    ctx.fillRect(LW/2-72-6,cy-6,12,12);
+    ctx.fillStyle=hov?'#ffd23f':'#000000';
+    ctx.fillRect(LW/2-72-3,cy-3,2,3);
+    ctx.fillRect(LW/2-72+2,cy-3,2,3);
+  });
+  txt('LOCKER',LW/2-72,cy+21,'#ffd23f',1,1);
+  bigBtn(LW/2+72,cy,32,'#4fc3ff',openEditor,0,(h,hov)=>{ // a little timeline of attack blocks
+    [[0,3,5],[2,1,4],[5,0,3]].forEach((row,r)=>row.forEach((ci,c)=>{
+      ctx.fillStyle=hov?'#000000':LEVELS[ci].color;
+      ctx.fillRect(LW/2+72-8+c*6,cy-7+r*5,5,4);
+    }));
+  });
+  txt('EDITOR',LW/2+72,cy+21,'#4fc3ff',1,1);
+  if(d>0)drifters();
+  drawMenuFly(t); // SECRET: swat the fly (GARY)
   if(!localStorage.pixel_tut_played&&!localStorage.pixel_tut_done){
     const glow=.5+.5*Math.sin(performance.now()/180);
     frame(2,181,50,16,glow>.5?'#ffd23f':mix(MENU_BG,'#ffd23f',.3));
@@ -1974,6 +2013,141 @@ function drawMenu(){
       ui.push({x:bx,y:183,w:bw+4+tw(label),h:11,fn:()=>playSecret('glitch')});
     }
   }
+}
+// the main menu's PLAY button, as crisp pixel art: a rounded green tile with a bevel ring and a white play triangle.
+// It grows 2 px on hover; on the menu music's beat the ring flashes instead of the button changing size.
+function drawPlayBtn(cx,cy,pulse){
+  const s=52,hov=hovIn(cx-s/2,cy-s/2,s,s),h=s/2+(hov?2:0),x=cx-h,y=cy-h,w=h*2,G='#5dff5d',t=performance.now()/1000;
+  const tile=(x,y,w,col)=>{ // a square with 2 px cut corners
+    ctx.fillStyle=col;
+    ctx.fillRect(x+2,y,w-4,w);
+    ctx.fillRect(x,y+2,w,w-4);
+    ctx.fillRect(x+1,y+1,w-2,w-2);
+  };
+  tile(x+3,y+3,w,'#000000'); // drop shadow
+  tile(x,y,w,'#000000'); // outline
+  tile(x+2,y+2,w-4,pulse||hov&&Math.floor(t*4)%2?'#ffffff':mix(MENU_BG,G,.3)); // bevel ring
+  tile(x+4,y+4,w-8,G);
+  // the triangle, one pixel row at a time; nudged right so it looks centred
+  const tri=(th,ox,oy,col)=>{
+    ctx.fillStyle=col;
+    const mid=(th-1)/2,len=Math.round(th*.86);
+    for(let r=0;r<th;r++)ctx.fillRect(ox,oy+r,Math.max(1,Math.round((1-Math.abs(r-mid)/(mid+1))*len)),1);
+  };
+  const th=Math.round(w*.46)|1,tx=cx-Math.round(th*.86/2)+2,ty=cy-(th-1)/2;
+  for(const [dx,dy] of [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1],[2,2]])tri(th,tx+dx,ty+dy,'#000000'); // even 1 px outline + a little shadow
+  tri(th,tx,ty,'#ffffff');
+  ui.push({x:cx-s/2,y:cy-s/2,w:s,h:s,fn:openLevels});
+}
+// a big square menu button centred on (cx,cy). It grows on hover; icon(half,hovered) draws on top.
+function bigBtn(cx,cy,s,col,fn,grow,icon){
+  const hov=mouse.x>=cx-s/2&&mouse.x<cx+s/2&&mouse.y>=cy-s/2&&mouse.y<cy+s/2,h=Math.round((s+grow+(hov?4:0))/2);
+  const t=performance.now()/1000,dim=mix(MENU_BG,col,.3);
+  ctx.fillStyle='#000000'; // drop shadow
+  ctx.fillRect(cx-h+3,cy-h+3,h*2,h*2);
+  ctx.fillStyle=hov?dim:'#000000';
+  ctx.fillRect(cx-h,cy-h,h*2,h*2);
+  frame(cx-h,cy-h,h*2,h*2,col);
+  frame(cx-h+2,cy-h+2,h*2-4,h*2-4,hov&&Math.floor(t*4)%2?'#ffffff':col);
+  icon(h,hov);
+  ui.push({x:cx-s/2,y:cy-s/2,w:s,h:s,fn});
+}
+// ---------- level picker (GD style): one big card at a time, arrows to browse, wraps around ----------
+const LS={on:false,i:0,dir:0,t0:0};
+function openLevels(){LS.on=true;LS.i=sel;LS.dir=0;}
+function closeLevels(){LS.on=false;lastInput=performance.now();}
+function lsGo(d){
+  LS.i=(LS.i+d+LEVELS.length)%LEVELS.length;
+  sel=LS.i;
+  LS.dir=Math.sign(d);
+  LS.t0=performance.now();
+}
+// keys while the picker is up (called from the keydown handler)
+function lsKey(e){
+  if(e.code==='ArrowLeft'||e.code==='KeyA')lsGo(-1);
+  if(e.code==='ArrowRight'||e.code==='KeyD')lsGo(1);
+  if(e.code==='Enter'||e.code==='Space')playLevel(LS.i);
+  if(e.code==='KeyP')openPractice(LS.i);
+  if(e.code==='Escape')closeLevels();
+}
+// a GD-style progress bar: label, bar, value
+function lsBar(y,label,f,val,col){
+  const x=84,w=128,dim=mix(MENU_BG,col,.3);
+  txt(label,44,y+1,'#ffffff');
+  ctx.fillStyle='#000000';
+  ctx.fillRect(x,y,w,7);
+  frame(x,y,w,7,dim);
+  ctx.fillStyle=col;
+  ctx.fillRect(x+1,y+1,Math.round((w-2)*clamp(f)),5);
+  txt(val,276,y+1,'#ffffff',1,2);
+}
+function drawLevels(){
+  const t=performance.now()/1000,i=LS.i,L=LEVELS[i],open=levelOpen(i),col=open?L.color:'#3a3a4a',dim=mix(MENU_BG,L.color,.3);
+  ctx.fillStyle=MENU_BG;
+  ctx.fillRect(0,0,LW,LH);
+  // the level's shape, big and dim, turning slowly behind everything
+  ctx.fillStyle=dim;
+  for(let j=0;j<3;j++){
+    poly(shapePts(L,28+j*14,t*(.15+j*.07)*(j%2?1:-1)),[30,290,160][j],[170,40,190][j]);
+    ctx.fill();
+  }
+  btn(4,4,34,12,'BACK','#ffffff',closeLevels);
+  txt('LEVEL '+(i+1)+'/'+LEVELS.length,LW/2,8,'#ffffff',1,1);
+  // the card slides in from the side you browsed toward
+  const u=clamp((performance.now()-LS.t0)/180),off=Math.round(LS.dir*(1-u)*(1-u)*90);
+  const x=44+off,y=24,w=232,h=92,hov=mouse.x>=44&&mouse.x<44+w&&mouse.y>=y&&mouse.y<y+h;
+  ctx.fillStyle='#000000';
+  ctx.fillRect(x+3,y+3,w,h);
+  ctx.fillRect(x,y,w,h);
+  frame(x,y,w,h,col);
+  frame(x+2,y+2,w-4,h-4,hov&&Math.floor(t*4)%2?'#ffffff':col);
+  ctx.fillStyle=col;
+  poly(shapePts(L,22,t*(hov?2:.5)),x+38,y+46);
+  ctx.fill();
+  if(open){
+    txt(L.name,x+72,y+16,col,3);
+    txt(L.shape,x+72,y+38,'#ffffff',2);
+    txt(MUSIC[i].bpm+' BPM',x+72,y+54,col);
+    if(best(i)>=100)txt('CLEARED!',x+w-8,y+8,col,1,2);
+    txt(hov?'CLICK TO PLAY':'',x+72,y+74,Math.floor(t*3)%2?'#ffffff':col);
+  }else{
+    padlock(x+35,y+42,'#ffd23f');
+    txt(L.name,x+72,y+16,col,3);
+    txt(LEVEL_XP[i]+' XP TO UNLOCK',x+72,y+40,'#ffffff');
+    txt('YOU HAVE '+xpTotal(),x+72,y+50,col);
+  }
+  ui.push({x:44,y,w,h,fn:()=>playLevel(i)});
+  // arrows
+  const arrow=(ax,d)=>{
+    const ahov=mouse.x>=ax-16&&mouse.x<ax+16&&mouse.y>=y+h/2-24&&mouse.y<y+h/2+24,bob=Math.round(Math.sin(t*4)*1.5)*d,c=ahov?'#ffffff':'#3a3a4a';
+    for(const [dx,cc] of [[2,'#000000'],[0,c]]){
+      ctx.fillStyle=cc;
+      ctx.beginPath();
+      ctx.moveTo(ax+bob+dx-d*8,y+h/2-14+dx);
+      ctx.lineTo(ax+bob+dx+d*8,y+h/2+dx);
+      ctx.lineTo(ax+bob+dx-d*8,y+h/2+14+dx);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ui.push({x:ax-16,y:y+h/2-24,w:32,h:48,fn:()=>lsGo(d)});
+  };
+  arrow(22,-1);
+  arrow(LW-22,1);
+  // progress, like GD's normal / practice bars
+  if(open){
+    lsBar(124,'BEST',best(i)/100,best(i)+'%',col);
+    lsBar(136,'SKILL',bestSkill(i)/100,bestSkill(i)?bestSkill(i)+' '+skillName(bestSkill(i)):'-',col);
+    btn(LW/2-30,152,60,14,'PRACTICE',col,()=>openPractice(i));
+  }
+  // page dots
+  LEVELS.forEach((Lj,j)=>{
+    const dx=LW/2-25+j*10;
+    ctx.fillStyle=j===i?Lj.color:levelOpen(j)?mix(MENU_BG,Lj.color,.3):'#3a3a4a';
+    if(j===i)ctx.fillRect(dx-2,176,5,5);
+    else ctx.fillRect(dx-1,177,3,3);
+    ui.push({x:dx-4,y:173,w:9,h:11,fn:()=>{if(j!==i)lsGo(j-i);}});
+  });
+  txt('< > TO BROWSE   ENTER TO PLAY   P PRACTICE   ESC BACK',LW/2,190,'#3a3a4a',1,1);
 }
 // ---------- menu actions ----------
 async function playLevel(i,from=0,practice=false){
@@ -2185,6 +2359,9 @@ const SECRETS=[
   {id:'pixel',name:'PIXEL'},
   {id:'glitch',name:'GLITCH'},
   {id:'lairotut',name:'LAIROTUT'},
+  {id:'mirror',name:'MIRROR'},
+  {id:'drift',name:'DRIFT'},
+  {id:'gary',name:'GARY'},
 ];
 const secretFound=id=>!!localStorage['pixel_secret_'+id];
 // every secret has a fixed number (its place in SECRETS): 'SECRET 1 FOUND!'
@@ -2203,7 +2380,7 @@ async function playSecret(id){
   ensureAudio();
   const first=!secretFound(id);
   localStorage['pixel_secret_'+id]='1';
-  const S={pixel:SECRET_PIXEL,glitch:SECRET_GLITCH,lairotut:SECRET_HELL}[id];
+  const S={pixel:SECRET_PIXEL,glitch:SECRET_GLITCH,lairotut:SECRET_HELL,mirror:SECRET_MIRROR,drift:SECRET_DRIFT,gary:SECRET_GARY}[id];
   if(!songCache.has(S.songId)){
     state='loading';
     loadMsg='???';
@@ -2212,6 +2389,10 @@ async function playSecret(id){
   try{startLevel(id,levelSong(S.songId,S.music,S.post),Object.assign({},S.L));}catch(e){console.error(e);state='menu';return;}
   G.tip={text:first?secretMsg(id):S.L.name,until:G.t+3,big:1};
 }
+
+// a level's colours and boss shape, copied onto another level (GLITCH and DRIFT borrow them)
+const LOOK_KEYS=['color','bg','dim','mid','light','warn','warnDim','pal','sides','star','rot0'];
+const copyLook=(dst,src)=>{LOOK_KEYS.forEach(k=>{dst[k]=src[k];});return dst;};
 
 // ===== PIXEL: the title screen's logo comes to life. Click the title to fight it. =====
 const PIX_CELL=12; // one font cell of the boss letters, in game units (letters are 36 x 60)
@@ -2323,9 +2504,7 @@ const SECRET_GLITCH={songId:102,
     // tuned to about HARDER: the effects already make it much harder than its numbers
     const L=prepL({name:'GLITCH',shape:'???',sides:5,color:'#3fffe0',bg:'#021412',D:3,S:.85,C:.6,half:2,secret:1,
       sig:LEVELS.flatMap(L=>L.sig),pool:[...new Set(LEVELS.flatMap(L=>L.pool))],calm:['aimed','spiral','petals','cross4','starfall']}); // (orbiters' slow rings pile up, so only in loud parts)
-    const LOOK=['color','bg','dim','mid','light','warn','warnDim','pal','sides','star','rot0'],base={};
-    LOOK.forEach(k=>{base[k]=L[k];});
-    const look=src=>LOOK.forEach(k=>{G.L[k]=src[k];});
+    const base=copyLook({},L),look=src=>copyLook(G.L,src);
     L.init=()=>look(base);
     L.onBlock=(i,T)=>{
       if(i<8)return;
@@ -2430,6 +2609,303 @@ const SECRET_HELL={songId:103,
     return L;
   })(),
 };
+// ===== MIRROR: your own skin, blown up, always standing exactly opposite you. Click your skin in the Locker 5 times. =====
+// It sits at the point-mirror of where you were a moment ago (so the middle of the screen is where you meet it),
+// and it leaves a short-lived trail of bullets behind it.
+const MIRROR_DELAY=.35;
+function mirrorPoke(){ // each click on your equipped skin in the Locker makes it wobble more; the 5th starts the fight
+  LK.pokes=(LK.pokes||0)+1;
+  sfx('click',1+LK.pokes*.15);
+  if(LK.pokes<5)return;
+  LK.pokes=0;
+  LK.on=false;
+  XT.on=false;
+  state='menu';
+  playSecret('mirror');
+}
+Object.assign(PAT,{
+  // where you were a beat ago is marked, then pops into a cross of bullets
+  echo(k,T,a){if(k%2)return;
+    const x=P.x,y=P.y,T1=T+G.bp;
+    G.haz.push({type:'mark',x,y,r:30,t1:T1});
+    at(T1,()=>{
+      const m=a>.7?8:4,o=(k>>1)%2?Math.PI/4:0;
+      for(let q=0;q<m;q++)bullet(x,y,o+q*TAU/m,200*G.S,12);
+      burst(x,y,G.L.color,8);
+    });
+  },
+  // the mirror cracks: lines through the middle of the screen show, then fire
+  crack(k,T,a){if(k%4)return;
+    const n=a>.7?3:2,a0=rng()*Math.PI;
+    for(let j=0;j<n;j++)laser(W/2,H/2,a0+j*Math.PI/n,28,T+G.bp,T+G.bp*1.6);
+  },
+});
+Object.assign(HINTS,{echo:['ECHO','DON\'T STAY WHERE YOU WERE'],crack:['CRACK','LEAVE THE LINES THROUGH THE MIDDLE'],
+  mirror:['THE MIRROR','IT STANDS OPPOSITE YOU - STAY OUT OF THE MIDDLE'],mtrail:['MIRROR TRAIL','ITS TRAIL HURTS FOR A SECOND']});
+const SECRET_MIRROR={songId:104,
+  music:{title:'MIRROR',bpm:124,root:62,scale:'mixo',prog:[[0,5,3,4],[3,4,5,4]],drums:'house',bass:'bounce',swing:.08,
+    lead:{w:'sq',duty:.5,vol:.085,dec:3,cut:3800},bassI:{w:'tri',vol:.32,dec:3},arp:'updown',arpRate:2,pad:{w:'tri',vol:.045},
+    form:[['intro',2],['A',4],['B',4],['drop',8],['break',2],['A',4],['B',4],['drop',8],['break',2],['B',2],['drop',8],['outro',2]]},
+  L:(()=>{
+    const L=prepL({name:'MIRROR',shape:'YOU',sides:4,color:'#a77bff',bg:'#0a0518',warn:'#ffd23f',D:2,S:.75,C:.6,half:1,secret:1,fixedBoss:1,
+      sig:['echo','crack'],pool:['echo','crack','aimed','ring','spiral','cross4','petals','bounce'],calm:['echo','aimed','petals']});
+    L.init=()=>{G.mhist=[];G.btrail=[];G.mtrail=0;boss.x=W-P.x;boss.y=H-P.y;};
+    L.tick=t=>{
+      G.mhist.push({t,x:W-P.x,y:H-P.y});
+      while(G.mhist.length>1&&G.mhist[1].t<=t-MIRROR_DELAY)G.mhist.shift();
+      boss.x=G.mhist[0].x;
+      boss.y=G.mhist[0].y;
+      G.btrail.push({x:boss.x,y:boss.y});
+      if(G.btrail.length>14)G.btrail.shift();
+      if(t>2&&t>=G.mtrail){G.mtrail=t+.15;bullet(boss.x,boss.y,0,0,14,{die:t+1.1,pat:'mtrail'});}
+    };
+    L.bossHit=()=>{if(Math.hypot(P.x-boss.x,P.y-boss.y)<44+PH)hurt({pat:'mirror'});};
+    L.drawBoss=()=>{}; // drawn after the palette pass, in your skin's exact colours (drawPost)
+    L.drawPost=()=>{
+      if(boss.dead)return;
+      const k=RES/3,ox=(G.sx||0)*RES,oy=(G.sy||0)*RES,t=performance.now()/1000,sk=curSkin();
+      ctx.setTransform(1,0,0,1,0,0);
+      drawTrail(G.btrail.map(p=>({x:p.x*k+ox,y:p.y*k+oy})),curTrail(),t,G.L.color,G.L.dim,sk,3);
+      drawSkin(boss.x*k+ox,boss.y*k+oy,sk,t,G.L.color,boss.pulse>.5?6:5);
+      ctx.setTransform(RES,0,0,RES,0,0);
+    };
+    return L;
+  })(),
+};
+
+// ===== DRIFT: leave the main menu alone for 45 s and its floating shapes drift together into one boss. =====
+// A boss rush: every phase (build + drop) it becomes the next level, EASY to EXTREME, with that level's
+// colours, shape and attacks (a little gentler than the real thing).
+const MENU_IDLE_SECS=45;
+let lastInput=0; // when the player last touched anything (set by the input handlers and toMenu)
+function menuIdle(){ // seconds of idling that count toward DRIFT (only on the bare main menu, once sound is allowed)
+  if(state!=='menu'||modal||firstVisit()||!actx||actx.state!=='running')return 0;
+  return (performance.now()-lastInput)/1000;
+}
+const SECRET_DRIFT={songId:105,
+  music:{title:'DRIFT',bpm:150,root:55,scale:'dorian',prog:[[0,3,4,0],[5,3,4,4]],drums:'drive',bass:'roll',swing:0,
+    lead:{w:'sq',duty:.25,vol:.085,dec:3.5,cut:4200},bassI:{w:'saw',vol:.18,dec:7,cut:650},arp:'up',arpRate:1,pad:{w:'saw',vol:.028,cut:1300},
+    form:[['intro',2],...[0,1,2,3,4,5].flatMap(i=>[['B',2],['drop',8],...(i<5?[['break',2]]:[])]),['outro',2]]},
+  L:(()=>{
+    const L=prepL({name:'DRIFT',shape:'EVERYTHING',sides:3,color:LEVELS[0].color,bg:LEVELS[0].bg,D:0,S:.45,C:.35,half:2,secret:1,
+      sig:LEVELS[0].sig,pool:LEVELS[0].pool,calm:LEVELS[0].calm});
+    const become=Lv=>{ // take on a level's attacks now (they are picked right away)...
+      Object.assign(G.L,{sig:Lv.sig,pool:Lv.pool,calm:Lv.calm,half:Lv.half,D:Lv.D});
+      G.S=Lv.S*.9;G.C=Lv.C*.9;G.D=Lv.D;
+    };
+    L.init=()=>{G.phase=-1;G.lastSec=null;copyLook(G.L,LEVELS[0]);become(LEVELS[0]);};
+    L.onBlock=(i,T)=>{
+      const sec=G.beats[i].sec;
+      if(sec==='B'&&G.lastSec!=='B'&&G.phase<5){
+        G.phase++;
+        const Lv=LEVELS[G.phase];
+        become(Lv);
+        at(T,()=>{ // ...and its look on the beat
+          copyLook(G.L,Lv);
+          G.tip={text:Lv.name+'!',until:T+2,big:1};
+          G.flash=.5;
+          burst(boss.x,boss.y,Lv.color,40,400);
+        });
+      }
+      G.lastSec=sec;
+    };
+    return L;
+  })(),
+};
+
+// ===== GARY: a fly. Every 40-60 s one buzzes across the main menu; click it and you miss, and he is FURIOUS. =====
+// Tough because of how he plays, not bullet count: he darts around, his swarm homes in, fly paper slows you,
+// a giant swatter keeps trying (and failing) to squash him, and sometimes he turns the lights out. He talks a lot.
+const GARY_LINES={
+  hit:[s=>'HA! TAKE THAT, BIG '+s+'.',()=>'THAT ONE WAS FOR MY COUSIN.',()=>"YOU'RE 2000 TIMES BIGGER THAN ME. EMBARRASSING.",
+    ()=>'BONK.',()=>'DID THAT HURT? I HOPE IT HURT.'],
+  rude:["STOP MOVING SO MUCH. IT'S RUDE.",'HOLD STILL! I JUST WANT TO LAND ON YOU.',"YOU'RE GOOD AT THIS. I HATE IT."],
+  miss:['MISSED ME!','NICE TRY, GIANT HAND.','TOO SLOW, HUMAN.'],
+  // said the first (or second) time each part of the song starts
+  sec:{A:["I'M NOT EVEN A SHAPE. I'M A FLY. THIS IS A SHAPE GAME.",'...YOUR SANDWICH WAS GREAT BY THE WAY.'],
+    B:['FUN FACT: I SEE YOU IN SLOW MOTION.','I HAVE 4000 EYES. ALL OF THEM HATE YOU.'],
+    drop:['BZZZZZZZZZZZZ (THAT MEANS DIE)','BZZZ BZZ. (TRANSLATION: STILL DIE)'],
+    break:['BRB, LANDING ON YOUR SANDWICH.','I ONLY LIVE 28 DAYS. YOU ARE WASTING MY TUESDAY.'],
+    outro:["OK I'M TIRED. FLYING IS CARDIO."]},
+};
+const garySay=(text,dur=3.2)=>{G.say={text,until:G.t+dur};};
+// the fly on the main menu: where it is (layout pixels) or null when it's away
+const MENU_FLY={next:0,t0:-1,n:0,lastBuzz:0};
+function menuFly(now){
+  const F=MENU_FLY,eligible=state==='menu'&&!modal&&!firstVisit();
+  if(!eligible){F.t0=-1;return null;}
+  if(!F.next)F.next=now+15000+Math.random()*15000; // first visit in 15-30 s, then every 40-60 s
+  if(F.t0<0&&now>=F.next){F.t0=now;F.n++;}
+  if(F.t0<0)return null;
+  const u=(now-F.t0)/7000;
+  if(u>=1){F.t0=-1;F.next=now+40000+Math.random()*20000;return null;}
+  const landed=u>=.42&&u<.58,uu=u<.42?u:u<.58?.42:u-.16,p=uu/.84,dir=F.n%2?1:-1;
+  const x=dir>0?lerp(-8,LW+8,p):lerp(LW+8,-8,p),y=55+(F.n*37)%90+(landed?0:Math.sin(p*25)*8+Math.sin(p*7)*14);
+  return {x:Math.round(x),y:Math.round(y),landed};
+}
+function drawMenuFly(t){
+  const now=performance.now(),f=menuFly(now);
+  if(!f)return;
+  if(!f.landed&&now-MENU_FLY.lastBuzz>350){MENU_FLY.lastBuzz=now;sfx('buzz',.9+Math.random()*.2,.35);}
+  const flap=!f.landed&&Math.floor(t*30)%2;
+  ctx.fillStyle='#ffffff'; // wings
+  ctx.fillRect(f.x-2,f.y-(flap?2:1),2,1);
+  ctx.fillRect(f.x+2,f.y-(flap?2:1),2,1);
+  ctx.fillStyle='#3a3a4a'; // body
+  ctx.fillRect(f.x-1,f.y,4,2);
+  ctx.fillStyle='#ff2a2a'; // eyes
+  ctx.fillRect(f.x+(MENU_FLY.n%2?2:-1),f.y,1,1);
+  ui.unshift({x:f.x-6,y:f.y-6,w:14,h:13,fn:()=>{MENU_FLY.t0=-1;MENU_FLY.next=now+40000;playSecret('gary');}}); // first, so it wins over the cards
+}
+Object.assign(PAT,{
+  // his friends: flies that home in on you with a jittery wobble; sidestep and they overshoot, then leave after 4 s
+  swarm(k,T,a){if(k%4)return;at(T,()=>{
+    const n=a>.7?6:4;
+    for(let j=0;j<n;j++)bullet(boss.x,boss.y,rng()*TAU,165*G.S,10,{fly:1,die:T+4,ph:rng()*TAU});
+  });},
+  // a warning lane from Gary toward you, then he charges down it; 2-3 times in a row
+  dive(k,T,a){if(k%4)return;
+    const n=a>.7?3:2;
+    for(let j=0;j<n;j++){
+      const Tw=T+j*G.bp*2,Td=Tw+G.bp*1.5;
+      at(Tw,()=>{
+        const ang=Math.atan2(P.y-boss.y,P.x-boss.x),e=rayEnd(boss.x,boss.y,ang,50);
+        G.diving=Td+.3;
+        G.haz.push({type:'dashwarn',x1:boss.x,y1:boss.y,x2:e.x,y2:e.y,w:70,t1:Td});
+        at(Td,()=>{moveBoss(e.x,e.y,Td,Td+.25,0,1);G.shake=Math.max(G.shake,6);});
+      });
+    }
+  },
+  // sound-wave rings with one gap. The gap is always placed where you can reach it in time: how far round the
+  // ring it may be depends on how soon the ring reaches you and how fast you can move (fly paper and the dark count).
+  buzz(k,T,a){if(k%2)return;
+    at(T,()=>{
+      const x=boss.x,y=boss.y,d=Math.hypot(P.x-x,P.y-y),dir=Math.atan2(P.y-y,P.x-x),vr=250*G.S;
+      const onPaper=G.haz.some(h=>h.type==='paper'&&G.t>=h.t0&&P.x>h.x&&P.x<h.x+h.w&&P.y>h.y&&P.y<h.y+h.h);
+      const dark=G.dark&&G.t>=G.dark.t0&&G.t<G.dark.t1;
+      const reach=Math.max(0,(d-20)/vr)*(onPaper?280/3:280)*(dark?.35:.6); // well under what you could actually move
+      const gapA=dir+(rng()*2-1)*Math.min(1.2,reach/Math.max(d,1)),ring=Tr=>G.haz.push({type:'ring',x,y,r0:20,vr,th:8,rMax:1200,t0:Tr,dmg:true,gapA,gapW:.42});
+      ring(T);
+      if(a>.7)at(T+G.bp/2,()=>ring(T+G.bp/2)); // a double ring shares the same gap
+    });
+  },
+  // sticky fly paper: slows you to a third while you stand on it (harmless itself), plus buzzing
+  paper(k,T,a){
+    if(k===0)for(let j=0;j<2;j++){
+      const w=170+rng()*60,h=120+rng()*50;
+      G.haz.push({type:'paper',x:40+rng()*(W-80-w),y:40+rng()*(H-80-h),w,h,t0:T+G.bp,t1:T+G.bp*8});
+    }
+    if(k%4===2)PAT.buzz(0,T,a);
+  },
+  // a giant swatter's shadow appears over GARY, then slams down; he always dodges. Don't be next to him.
+  swatter(k,T,a){
+    if(k%4===1&&a>.6)PAT.buzz(0,T,.5);
+    if(k%4)return;
+    const s=170,x=clamp(boss.x-s/2,0,W-s),y=clamp(boss.y-s/2,0,H-s),T1=T+G.bp*1.5;
+    G.haz.push({type:'rect',x,y,w:s,h:s,vx:0,vy:0,t0:T1,t1:T1+.2,warn:{x,y,w:s,h:s}});
+    at(T1,()=>{
+      G.shake=Math.max(G.shake,12);
+      burst(x+s/2,y+s/2,G.L.light,24,300);
+      if(!G.say||G.t>G.say.until-1)garySay(GARY_LINES.miss[Math.floor(rng()*GARY_LINES.miss.length)],1.6);
+    });
+  },
+  // eggs dropped where he flies; each hatches into 2 homing flies
+  eggs(k,T,a){if(k%4)return;
+    for(let j=0;j<3;j++){
+      const Te=T+j*G.bp/2;
+      at(Te,()=>{
+        const x=boss.x,y=boss.y,Th=Te+G.bp*2;
+        G.haz.push({type:'mark',x,y,r:16,t1:Th});
+        at(Th,()=>{for(let q=0;q<2;q++)bullet(x,y,rng()*TAU,150*G.S,10,{fly:1,die:Th+3.5,ph:rng()*TAU});});
+      });
+    }
+  },
+  // the lights go out for 2 bars: you only see near yourself (and his glowing eyes)
+  lightsOut(k,T,a){
+    if(k===0)at(T,()=>{G.dark={t0:T,t1:T+G.bp*8};garySay("WHO TURNED OFF THE LIGHTS? ...ME. I DID.");});
+    if(k%4===2)PAT.buzz(0,T,.5);
+    if(k===5)at(T,()=>{for(let j=0;j<3;j++)bullet(boss.x,boss.y,rng()*TAU,150*G.S,10,{fly:1,die:T+4,ph:rng()*TAU});});
+  },
+});
+Object.assign(HINTS,{gary:['GARY','HE IS SMALL BUT HE STILL HURTS'],swarm:['SWARM','SIDESTEP AND THEY OVERSHOOT'],dive:['DIVE BOMB','LEAVE THE LANE'],
+  buzz:['BUZZ','FIND THE GAP IN EACH RING'],paper:['FLY PAPER',"IT SLOWS YOU - DON'T GET STUCK"],swatter:['THE SWATTER',"IT AIMS AT GARY - DON'T STAND NEAR HIM"],
+  eggs:['EGGS','THEY HATCH - MOVE AWAY'],lightsOut:['LIGHTS OUT','STAY CALM AND WATCH CLOSE BY']});
+const SECRET_GARY={songId:106,
+  music:{title:'GARY',bpm:160,root:59,scale:'harm',prog:[[0,4,5,4],[3,4,0,0]],drums:'dnb',bass:'funk',swing:0, // a frantic, buzzy chromatic tune
+    lead:{w:'saw',vol:.075,dec:2,cut:4200,vib:.012},bassI:{w:'sq',duty:.25,vol:.19,dec:6,cut:1000},arp:'fast',arpRate:1,pad:{w:'tri',vol:.04},
+    form:[['intro',2],['A',6],['B',4],['drop',8],['break',2],['A',4],['B',4],['drop',8],['break',2],['B',4],['drop',10],['outro',2]]},
+  L:(()=>{
+    const L=prepL({name:'GARY',shape:'A FLY',sides:3,color:'#9fe870',bg:'#0d1114',warn:'#ff4fd8',D:4,S:1,C:.9,half:0,secret:1,fixedBoss:1,noFlourish:1,
+      sig:['swarm','dive','lightsOut'],pool:['swarm','dive','buzz','paper','swatter','eggs','lightsOut'],calm:['buzz','eggs','paper']});
+    L.pal=[...L.pal,rgb('#ff2a2a')];
+    L.deathLines=['GARY: GG.','GOING TO GO LAND ON SOMETHING GROSS NOW.'];
+    L.winSub='GARY: FINE. YOU WIN.';
+    L.winLines=['BUT I ONLY LIVE 28 DAYS','AND I SPENT 2 MINUTES ON YOU.'];
+    L.init=()=>{
+      G.drng=mulberry(G.seed^0x5eed); // his darting is seeded too, so runs are repeatable
+      G.nextDart=0;G.diving=0;G.dark=null;G.say=null;G.lastHitT=G.t;G.nextRude=G.t+20;G.secN={};
+      G.intro=[[.4,'OI! YOU TRIED TO SWAT ME.'],[3.4,'I WAS JUST SITTING THERE.']];
+      boss.x=W/2;boss.y=160;
+    };
+    L.tick=t=>{
+      while(G.intro.length&&t>=G.intro[0][0])garySay(G.intro.shift()[1]);
+      if(t>G.lastHitT+20&&t>G.nextRude){G.nextRude=t+15;garySay(GARY_LINES.rude[Math.floor(G.drng()*GARY_LINES.rude.length)]);}
+      if(t<G.diving||boss.tw||t<G.nextDart)return;
+      // dart somewhere nearby, never straight onto you
+      const r=G.drng;
+      let x=boss.x,y=boss.y;
+      for(let tries=0;tries<8;tries++){
+        const a=r()*TAU,d=90+r()*170;
+        x=clamp(boss.x+Math.cos(a)*d,60,W-60);
+        y=clamp(boss.y+Math.sin(a)*d,60,H-60);
+        if(Math.hypot(x-P.x,y-P.y)>=140)break;
+      }
+      moveBoss(x,y,t,t+.16+r()*.1,0);
+      G.nextDart=t+.2+r()*.55;
+    };
+    L.onBlock=(i,T)=>{ // a line the first two times each part of the song starts
+      const sec=G.beats[i].sec;
+      if(sec===G.lastSec)return;
+      G.lastSec=sec;
+      if(T>=G.finaleT-.01&&sec==='drop'){at(T+G.bp*2,()=>garySay("THIS IS MY FINAL FORM. ...IT'S THE SAME FORM. I'M A FLY.",4));return;}
+      const lines=GARY_LINES.sec[sec],n=G.secN[sec]=(G.secN[sec]||0)+1;
+      if(lines&&lines[n-1])at(T,()=>garySay(lines[n-1]));
+    };
+    L.onHurt=()=>{
+      G.lastHitT=G.t;
+      G.nextRude=G.t+20;
+      const f=GARY_LINES.hit[Math.floor(G.drng()*GARY_LINES.hit.length)];
+      garySay(f(curSkin().name),2.4);
+    };
+    L.bossHit=()=>{if(Math.hypot(P.x-boss.x,P.y-boss.y)<12+PH)hurt({pat:'gary'});};
+    L.drawBoss=t=>{
+      const L=G.L,x=boss.x+Math.sin(t*37)*1.5,y=boss.y+Math.cos(t*29)*1.5,face=Math.atan2(P.y-y,P.x-x),flap=Math.floor(t*30)%2;
+      ctx.fillStyle=L.light; // wings
+      for(const sd of[-1,1]){
+        ctx.beginPath();
+        ctx.ellipse(x+sd*9,y-6-(flap?3:0),9,5,sd*(flap?.7:.3),0,TAU);
+        ctx.fill();
+      }
+      ctx.fillStyle=L.mid; // body
+      ctx.beginPath();
+      ctx.ellipse(x,y,11,8,face,0,TAU);
+      ctx.fill();
+      // LIGHTS OUT: everything but a circle around you goes dark (his eyes still glow)
+      if(G.dark&&t>=G.dark.t0&&t<G.dark.t1){
+        const f=Math.min(1,(t-G.dark.t0)/.3,(G.dark.t1-t)/.3),R=170+(1-f)*900;
+        ctx.fillStyle=L.bg;
+        ctx.beginPath();
+        ctx.rect(-60,-60,W+120,H+120);
+        ctx.arc(P.x,P.y,R,0,TAU);
+        ctx.fill('evenodd');
+      }
+      ctx.fillStyle='#ff2a2a'; // eyes
+      for(const sd of[-.5,.5]){ctx.beginPath();ctx.arc(x+Math.cos(face+sd)*7,y+Math.sin(face+sd)*7,3.5,0,TAU);ctx.fill();}
+    };
+    return L;
+  })(),
+};
+
 // ---------- extras: locker, level editor, sound, wipe ----------
 const XT={on:false};
 function openExtras(){
@@ -2498,7 +2974,7 @@ function drawExtras(){
 // ---------- locker: pick your skin and trail ----------
 const LK={on:false};
 function openLocker(){LK.on=true;state='editor';ED.on=false;}
-function closeLocker(){backFromSub();}
+function closeLocker(){LK.pokes=0;backFromSub();}
 function padlock(x,y,c){
   ctx.fillStyle=c;
   ctx.fillRect(x+1,y,4,1);
@@ -2526,7 +3002,10 @@ function drawLocker(){
         txt(k.xp+' XP',x+20,y+31,'#3a3a4a',1,1);
       }
       txt(k.name,x+20,y+43,open?(on?'#ffd23f':'#ffffff'):'#3a3a4a',1,1);
-      if(open)ui.push({x,y,w:40,h:40,fn:()=>{set(k.id);}});
+      if(open)ui.push({x,y,w:40,h:40,fn:()=>{
+        if(on&&items===SKINS)mirrorPoke(); // SECRET: poke your own skin 5 times
+        else{LK.pokes=0;set(k.id);}
+      }});
     });
   };
   row(SKINS,30,'SKINS',curSkin(),id=>{localStorage.pixel_skin=id;});
@@ -2544,7 +3023,9 @@ function lockerPost(){
   ctx.setTransform(1,0,0,1,0,0);
   SKINS.forEach((k,i)=>{
     if(xp<k.xp)return;
-    drawSkin((8+i*44+20)*R,(30+18)*R,k,t,'#4fc3ff',2);
+    // the equipped skin wobbles harder each time you poke it (MIRROR hint)
+    const p=k.id===curSkin().id?LK.pokes||0:0,wx=p?Math.round(Math.sin(t*45)*p*1.5):0,wy=p?-Math.round(Math.abs(Math.sin(t*9))*p*2):0;
+    drawSkin((8+i*44+20)*R+wx,(30+18)*R+wy,k,t,'#4fc3ff',2);
   });
   TRAILS.forEach((k,i)=>{
     if(xp<k.xp)return;
@@ -2577,7 +3058,7 @@ customLevels.forEach(lv=>{
   delete lv.mp3;
 });
 const saveLevels=()=>{localStorage.pixel_levels=JSON.stringify(customLevels);};
-const ED={on:false,screen:'list',lv:null,sel:0,scroll:0,naming:false,del:null},edPals={};
+const ED={on:false,screen:'list',lv:null,sel:0,naming:false,del:null},edPals={};
 let modal=null;
 function edPal(ci){
   if(!edPals[ci]){
@@ -2620,7 +3101,6 @@ function openEdit(lv){
   ED.lv=lv;
   ED.screen='edit';
   ED.sel=0;
-  ED.scroll=0;
   ED.naming=false;
   ED.del=null;
   fitBlocks(lv);
@@ -2682,106 +3162,187 @@ function drawEditor(){
   const t=performance.now()/1000;
   ctx.fillStyle=MENU_BG;
   ctx.fillRect(0,0,LW,LH);
-  if(ED.screen==='edit'&&ED.lv)drawEdEdit(t);
+  if(ED.screen==='settings'&&ED.lv)drawEdSettings(t);
+  else if(ED.screen==='edit'&&ED.lv)drawEdEdit(t);
   else drawEdList(t);
 }
+// which main level an attack first shows up in: the editor's attack palette is grouped (and coloured) by these
+const atkHome=k=>LEVELS.findIndex(L=>L.pool.includes(k));
+const ATK_ROWS=LEVELS.map((L,i)=>ATK.filter(a=>atkHome(a[0])===i));
+const SEC_KIND=s=>s==='drop'?2:s==='B'?1:0; // calm / build / drop, for the timeline's colour strip
+const hovIn=(x,y,w,h)=>mouse.x>=x&&mouse.x<x+w&&mouse.y>=y&&mouse.y<y+h;
 function drawEdList(t){
-  txt('LEVEL EDITOR',LW/2,6,'#ffffff',2,1);
   btn(4,4,34,12,'BACK','#ffffff',backFromSub);
-  if(!customLevels.length)txt('NO LEVELS YET - MAKE ONE!',LW/2,90,'#ffffff',1,1);
+  txt('LEVEL EDITOR',LW/2,6,'#ffffff',2,1);
+  txt(customLevels.length+'/6 SLOTS',LW-4,8,'#3a3a4a',1,2);
+  if(!customLevels.length){
+    txt('NO LEVELS YET',LW/2,70,'#ffffff',2,1);
+    txt('PICK A SONG, PUT ATTACKS ON ITS TIMELINE, PLAY IT',LW/2,88,'#3a3a4a',1,1);
+  }
   customLevels.forEach((lv,i)=>{
-    const y=24+i*24,co=ED_COLORS[lv.color].c;
-    frame(4,y,312,21,co);
-    ctx.fillStyle=co;
-    poly(shapePts(SHAPES[lv.shape],7,t*(i%2?1:-1)),16,y+10);
+    const y=24+i*25,c=ED_COLORS[lv.color].c,id='c'+lv.id;
+    ctx.fillStyle='#000000';
+    ctx.fillRect(4,y,312,22);
+    frame(4,y,312,22,c);
+    ctx.fillStyle=mix(MENU_BG,c,.3); // a little tile with the level's shape
+    ctx.fillRect(6,y+2,18,18);
+    ctx.fillStyle=c;
+    poly(shapePts(SHAPES[lv.shape],7,t*(i%2?1:-1)),15,y+11);
     ctx.fill();
-    txt(trunc(lv.name,24),28,y+4,co);
-    txt(trunc(songInfo(lv).name,18)+'   BEST '+best('c'+lv.id)+'%'+(bestSkill('c'+lv.id)?' SKILL '+bestSkill('c'+lv.id):''),28,y+12,'#ffffff');
-    btn(196,y+5,36,12,'PLAY',co,()=>playCustom(lv,false));
-    btn(236,y+5,36,12,'EDIT',co,()=>openEdit(lv));
+    txt(trunc(lv.name,18),30,y+3,c,2);
+    txt(MUSIC[lv.track].title+'   BEST '+best(id)+'%'+(bestSkill(id)?'   SKILL '+bestSkill(id):''),30,y+15,'#ffffff');
+    btn(196,y+5,36,12,'PLAY',c,()=>playCustom(lv,false));
+    btn(236,y+5,36,12,'EDIT',c,()=>openEdit(lv));
     const sure=ED.del===lv.id;
-    btn(276,y+5,36,12,sure?'SURE?':'DEL',sure?'#ff2a2a':co,()=>{
+    btn(276,y+5,36,12,sure?'SURE?':'DELETE',sure?'#ff2a2a':c,()=>{
       if(sure)deleteLevel(lv);
       else ED.del=lv.id;
     });
   });
   if(customLevels.length<6)btn(LW/2-40,176,80,14,'+ NEW LEVEL','#ffffff',newLevel);
+  else txt('ALL 6 SLOTS USED - DELETE ONE TO MAKE ROOM',LW/2,180,'#3a3a4a',1,1);
+}
+// one line describing a timeline box: where it is in the song and what it holds
+function boxInfo(lv,b){
+  const si=songInfo(lv),ts=si.off+b*8*si.bp,k=lv.blocks[b];
+  const what=k==='auto'?'AUTO (THE GAME PICKS)':k==='rest'?'REST (NO ATTACK)':atkInfo(k)[1];
+  return `BOX ${b+1}/${lv.blocks.length}  ${Math.floor(ts/60)}:${String(Math.floor(ts%60)).padStart(2,'0')}  ${SEC_NAMES[si.sec(b)]}  -  ${what}`;
+}
+// the level's look: your shape and colours, one orbiting bullet per BULLETS step, spinning faster with SPEED
+function edPreview(lv,x,y,w,h,r){
+  const co=ED_COLORS[lv.color],c=co.c,D=clamp(Math.round((lv.speed-1)/9*5),0,5),cx=x+w/2,cy=y+Math.round(h*.4),spin=performance.now()/1000*(.3+lv.speed*.15);
+  ctx.fillStyle=co.bg;
+  ctx.fillRect(x,y,w,h);
+  frame(x,y,w,h,c);
+  ctx.fillStyle=c;
+  poly(shapePts(SHAPES[lv.shape],r,spin),cx,cy);
+  ctx.fill();
+  ctx.fillStyle='#ffffff';
+  for(let j=0;j<lv.dens;j++){
+    const a=-spin*1.6+j*TAU/lv.dens;
+    ctx.fillRect(Math.round(cx+Math.cos(a)*r*1.75)-1,Math.round(cy+Math.sin(a)*r*1.25)-1,3,3);
+  }
+  txt('PLAYS LIKE',cx,y+h-17,mix(co.bg,c,.6),1,1);
+  txt(LEVELS[D].name,cx,y+h-9,LEVELS[D].color,1,1);
 }
 function drawEdEdit(t){
-  const lv=ED.lv,co=ED_COLORS[lv.color],c=co.c,si=songInfo(lv),nb=lv.blocks.length;
-  // name (click to type)
-  frame(4,4,150,12,ED.naming?'#ffffff':c);
-  txt(lv.name+(ED.naming&&Math.floor(t*3)%2?'_':''),8,7,'#ffffff');
-  ui.push({x:4,y:4,w:150,h:12,fn:()=>{
-    ED.naming=!ED.naming;
-    ED.fresh=ED.naming;
-    saveLevels();
-  }});
-  btn(196,4,36,12,'TEST',c,()=>playCustom(lv,true));
-  btn(236,4,36,12,'PLAY',c,()=>playCustom(lv,false));
-  btn(276,4,40,12,'DONE','#ffffff',()=>{
+  const lv=ED.lv,co=ED_COLORS[lv.color],c=co.c,dim=mix(co.bg,c,.3),mid=mix(co.bg,c,.6),si=songInfo(lv),nb=lv.blocks.length;
+  let info=null; // [text, colour] for the explainer line: whatever the mouse is over (else the selected box)
+  // ---- header: done, name, settings, play
+  btn(4,4,36,12,'DONE','#ffffff',()=>{
     ED.naming=false;
     saveLevels();
     ED.screen='list';
   });
-  stepper(4,20,208,'SONG',trunc(si.name,30),()=>cycleTrack(lv,-1),()=>cycleTrack(lv,1),c);
-  stepper(216,20,100,'COLOUR',co.name,()=>{lv.color=(lv.color+ED_COLORS.length-1)%ED_COLORS.length;},()=>{lv.color=(lv.color+1)%ED_COLORS.length;},c);
-  stepper(4,42,100,'SHAPE',SHAPES[lv.shape].label,()=>{lv.shape=(lv.shape+5)%6;},()=>{lv.shape=(lv.shape+1)%6;},c);
-  stepper(110,42,100,'SPEED',lv.speed,()=>{lv.speed=Math.max(1,lv.speed-1);},()=>{lv.speed=Math.min(10,lv.speed+1);},c);
-  stepper(216,42,100,'BULLETS',lv.dens,()=>{lv.dens=Math.max(1,lv.dens-1);},()=>{lv.dens=Math.min(10,lv.dens+1);},c);
-  stepper(4,64,100,'PACE',['RELAXED','NORMAL','INTENSE'][lv.pace],()=>{lv.pace=(lv.pace+2)%3;},()=>{lv.pace=(lv.pace+1)%3;},c);
-  ctx.fillStyle=c;
-  poly(shapePts(SHAPES[lv.shape],9,t),160,74);
-  ctx.fill();
-  txt('HEALTH 3   BEST '+best('c'+lv.id)+'%',216,72,'#ffffff');
-  // timeline: one box per 2 bars
-  const per=20,rows=3,cw=15,ch=12,x0=6,y0=94,maxS=Math.max(0,Math.ceil(nb/per)-rows);
-  const sr=Math.floor(ED.sel/per);
-  if(sr<ED.scroll)ED.scroll=sr;
-  if(sr>=ED.scroll+rows)ED.scroll=sr-rows+1;
-  ED.scroll=clamp(ED.scroll,0,maxS);
-  const ts=si.off+ED.sel*8*si.bp,mm=Math.floor(ts/60),ss=Math.floor(ts%60);
-  txt('TIMELINE',4,84,'#ffffff');
-  txt(`BOX ${ED.sel+1}/${nb}  ${mm}:${String(ss).padStart(2,'0')}  ${lv.track>=0?si.sec(ED.sel).toUpperCase()+'  ':''}${atkInfo(lv.blocks[ED.sel])[1]}`,44,84,c);
-  for(let r=0;r<rows;r++)for(let q=0;q<per;q++){
-    const b=(ED.scroll+r)*per+q;
-    if(b>=nb)break;
-    const x=x0+q*cw,y=y0+r*(ch+2),sec=si.sec(b),hot=sec==='drop',a=atkInfo(lv.blocks[b]);
-    ctx.fillStyle=hot?c:sec==='B'?mix(co.bg,c,.6):mix(co.bg,c,.3);
-    ctx.fillRect(x,y,cw-1,ch);
-    txt(a[2],x+7,y+4,hot?'#000000':a[0]==='auto'?mix(co.bg,c,.6):'#ffffff',1,1);
-    if(b===ED.sel)frame(x-1,y-1,cw+1,ch+2,Math.floor(t*4)%2?'#ffffff':'#000000');
-    ui.push({x,y,w:cw-1,h:ch,fn:()=>{ED.sel=b;ED.naming=false;}});
+  const nameHov=hovIn(46,4,150,12);
+  frame(46,4,150,12,ED.naming||nameHov?'#ffffff':c);
+  txt(lv.name+(ED.naming&&Math.floor(t*3)%2?'_':''),50,7,'#ffffff');
+  txt(ED.naming?'ENTER = OK':'RENAME',192,7,ED.naming?c:dim,1,2);
+  ui.push({x:46,y:4,w:150,h:12,fn:()=>{
+    ED.naming=!ED.naming;
+    ED.fresh=ED.naming;
+    saveLevels();
+  }});
+  btn(218,4,56,12,'SETTINGS',c,()=>{ED.naming=false;ED.screen='settings';});
+  btn(278,4,38,12,'PLAY',c,()=>playCustom(lv,false));
+  // ---- timeline: one box per 2 bars, in two rows; the strip under each box shows the part of the song
+  txt('TIMELINE',4,26,'#ffffff');
+  txt('1 BOX = 2 BARS',40,26,dim);
+  [[236,'CALM',dim],[262,'BUILD',mid],[294,'DROP',c]].forEach(([x,s,col])=>{
+    ctx.fillStyle=col;
+    ctx.fillRect(x,26,4,5);
+    txt(s,x+6,26,col);
+  });
+  const per=Math.ceil(nb/2),cw=16,x0=Math.round((LW-per*cw)/2);
+  for(let b=0;b<nb;b++){
+    const r=b<per?0:1,x=x0+(b-r*per)*cw,y=36+r*20,a=atkInfo(lv.blocks[b]),hm=atkHome(a[0]),ac=hm>=0?LEVELS[hm].color:null;
+    ctx.fillStyle=ac?mix(MENU_BG,ac,.3):'#000000';
+    ctx.fillRect(x,y,cw-1,14);
+    if(a[0]==='auto')frame(x,y,cw-1,14,'#3a3a4a');
+    else txt(a[0]==='rest'?'-':a[2],x+8,y+5,ac||'#ffffff',1,1);
+    ctx.fillStyle=[dim,mid,c][SEC_KIND(si.sec(b))];
+    ctx.fillRect(x,y+15,cw-1,2);
+    if(b===ED.sel)frame(x-1,y-1,cw+1,16,Math.floor(t*4)%2?'#ffffff':'#000000');
+    if(hovIn(x,y-2,cw,20))info=[boxInfo(lv,b),ac||c];
+    ui.push({x,y:y-2,w:cw,h:20,fn:()=>{ED.sel=b;ED.naming=false;}});
   }
-  if(maxS>0){
-    btn(308,y0,10,ch,'^','#ffffff',()=>{
-      ED.scroll=Math.max(0,ED.scroll-1);
-      ED.sel=Math.max(0,ED.sel-per);
-    });
-    btn(308,y0+2*(ch+2),10,ch,'V','#ffffff',()=>{
-      ED.scroll=Math.min(maxS,ED.scroll+1);
-      ED.sel=Math.min(nb-1,ED.sel+per);
-    });
-  }
-  // attack palette: click to fill the selected box, then it moves to the next box
-  ATK.forEach((a,i)=>{
-    const x=4+(i%8)*39,y=140+Math.floor(i/8)*11,on=lv.blocks[ED.sel]===a[0];
-    btn(x,y,38,10,a[1],on?'#ffffff':c,()=>{
-      lv.blocks[ED.sel]=a[0];
-      ED.sel=Math.min(nb-1,ED.sel+1);
-      ED.naming=false;
-      saveLevels();
+  // ---- the two special fills, next to the explainer line
+  const fill=k=>()=>{
+    lv.blocks[ED.sel]=k;
+    ED.sel=Math.min(nb-1,ED.sel+1);
+    ED.naming=false;
+    saveLevels();
+  };
+  btn(236,78,38,11,'AUTO',lv.blocks[ED.sel]==='auto'?'#ffffff':c,fill('auto'));
+  if(hovIn(234,76,42,15))info=['AUTO - THE GAME PICKS AN ATTACK FOR THIS BOX',c];
+  btn(278,78,38,11,'REST',lv.blocks[ED.sel]==='rest'?'#ffffff':c,fill('rest'));
+  if(hovIn(276,76,42,15))info=['REST - NO ATTACK IN THIS BOX',c];
+  // ---- attacks, one row per level they come from. Hover zones cover the gaps so the explainer never flickers.
+  ATK_ROWS.forEach((row,i)=>{
+    const y=96+i*14,L=LEVELS[i];
+    txt(L.name,4,y+3,L.color);
+    row.forEach((a,j)=>{
+      const x=40+j*55;
+      btn(x,y,53,11,a[1],lv.blocks[ED.sel]===a[0]?'#ffffff':L.color,fill(a[0]));
+      if(hovIn(x-1,y-2,55,14))info=[a[1]+' - '+(HINTS[a[0]]?HINTS[a[0]][1]:''),L.color];
     });
   });
-  txt('CLICK A BOX THEN AN ATTACK - ARROWS MOVE - DEL = AUTO - T = TEST',LW/2,190,'#3a3a4a',1,1);
+  // between things inside the timeline or palette, keep explaining whatever was last under the mouse
+  if(info)ED.info=info;
+  else if(ED.info&&hovIn(0,34,LW,148))info=ED.info;
+  else ED.info=null;
+  if(!info)info=[boxInfo(lv,ED.sel),c];
+  txt(trunc(info[0],57),4,81,info[1]);
+  txt('CLICK A BOX, THEN AN ATTACK   ARROWS MOVE   DEL = AUTO',LW/2,190,'#3a3a4a',1,1);
+}
+// ---- level settings: song, look, speed, bullets, pace. Each row says what it does.
+function drawEdSettings(t){
+  const lv=ED.lv,co=ED_COLORS[lv.color],c=co.c,dim=mix(co.bg,c,.3),M=MUSIC[lv.track],nb=lv.blocks.length;
+  const set=fn=>()=>{fn();saveLevels();};
+  btn(4,4,34,12,'BACK','#ffffff',()=>{ED.screen='edit';});
+  txt('LEVEL SETTINGS',LW/2,6,'#ffffff',2,1);
+  edPreview(lv,10,28,100,112,18);
+  txt(trunc(lv.name,24),60,146,c,1,1);
+  const X=124,CX=164;
+  const row=(y,label,desc)=>{
+    txt(label,X,y+2,'#ffffff');
+    txt(desc,X,y+13,dim);
+  };
+  const arrows=(x,y,w,val,prev,next)=>{
+    btn(x,y,10,9,'<',c,set(prev));
+    txt(val,x+w/2,y+2,'#ffffff',1,1);
+    btn(x+w-10,y,10,9,'>',c,set(next));
+  };
+  const pips=(y,v,fn)=>{ // a 10-step slider: click a step to set it
+    for(let j=1;j<=10;j++){
+      const x=CX+(j-1)*10;
+      ctx.fillStyle=hovIn(x,y,10,9)?'#ffffff':j<=v?c:dim;
+      ctx.fillRect(x,y+1,9,7);
+      ui.push({x,y,w:10,h:9,fn:set(()=>fn(j))});
+    }
+    txt(v+'/10',CX+104,y+2,'#ffffff');
+  };
+  row(28,'SONG',`THE MUSIC - ${nb} BOXES ON ITS TIMELINE`);
+  arrows(CX,28,148,M.title+'  '+M.bpm+' BPM',()=>cycleTrack(lv,-1),()=>cycleTrack(lv,1));
+  row(52,'SHAPE','HOW THE CORE LOOKS');
+  arrows(CX,52,148,SHAPES[lv.shape].label,()=>{lv.shape=(lv.shape+5)%6;},()=>{lv.shape=(lv.shape+1)%6;});
+  row(76,'COLOUR',"THE LEVEL'S COLOURS");
+  arrows(CX,76,148,co.name,()=>{lv.color=(lv.color+ED_COLORS.length-1)%ED_COLORS.length;},()=>{lv.color=(lv.color+1)%ED_COLORS.length;});
+  row(100,'SPEED','HOW FAST ATTACKS MOVE + WHAT AUTO PICKS');
+  pips(100,lv.speed,v=>{lv.speed=v;});
+  row(124,'BULLETS','HOW MANY BULLETS EACH ATTACK FIRES');
+  pips(124,lv.dens,v=>{lv.dens=v;});
+  row(148,'PACE',['FEWER ATTACKS, MORE ROOM TO BREATHE','HOW OFTEN ATTACKS COME','ATTACKS ON EVERY BEAT, PLUS EXTRAS'][lv.pace]);
+  ['RELAXED','NORMAL','INTENSE'].forEach((n,k)=>btn(CX+k*50,148,48,9,n,lv.pace===k?'#ffffff':c,set(()=>{lv.pace=k;})));
+  txt('ESC TO GO BACK',LW/2,190,'#3a3a4a',1,1);
 }
 function edKey(e){
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Backspace'].includes(e.code))e.preventDefault();
   if(e.code==='Escape'){
-    if(ED.naming){ED.naming=false;saveLevels();}else if(ED.screen==='edit'){saveLevels();ED.screen='list';}else backFromSub();
+    if(ED.naming){ED.naming=false;saveLevels();}else if(ED.screen==='settings')ED.screen='edit';else if(ED.screen==='edit'){saveLevels();ED.screen='list';}else backFromSub();
     return;
   }
-  if(ED.screen!=='edit'||!ED.lv)return;
+  if(ED.screen!=='edit'||!ED.lv)return; // (the settings screen is mouse only)
   const lv=ED.lv,nb=lv.blocks.length;
   if(ED.naming){
     if(e.code==='Enter'){ED.naming=false;saveLevels();}else if(e.code==='Backspace'){
@@ -2799,10 +3360,9 @@ function edKey(e){
   }
   if(e.code==='ArrowRight')ED.sel=Math.min(nb-1,ED.sel+1);
   if(e.code==='ArrowLeft')ED.sel=Math.max(0,ED.sel-1);
-  if(e.code==='ArrowDown')ED.sel=Math.min(nb-1,ED.sel+20);
-  if(e.code==='ArrowUp')ED.sel=Math.max(0,ED.sel-20);
+  if(e.code==='ArrowDown')ED.sel=Math.min(nb-1,ED.sel+Math.ceil(nb/2)); // the timeline is two rows
+  if(e.code==='ArrowUp')ED.sel=Math.max(0,ED.sel-Math.ceil(nb/2));
   if(e.code==='Delete'||e.code==='Backspace'){lv.blocks[ED.sel]='auto';saveLevels();}
-  if(e.code==='KeyT'&&!e.repeat)playCustom(lv,true);
 }
 // ---------- input & loop ----------
 function toLocal(e){
@@ -2810,16 +3370,18 @@ function toLocal(e){
   mouse.x=Math.floor((e.clientX-r.left)/r.width*LW);
   mouse.y=Math.floor((e.clientY-r.top)/r.height*LH);
 }
-cv.addEventListener('mousemove',toLocal);
+cv.addEventListener('mousemove',e=>{toLocal(e);lastInput=performance.now();});
 cv.addEventListener('mouseleave',()=>{mouse.x=mouse.y=-1;});
 cv.addEventListener('click',e=>{
+  lastInput=performance.now();
   toLocal(e);
   const b=uiPrev.find(b=>mouse.x>=b.x&&mouse.x<b.x+b.w&&mouse.y>=b.y&&mouse.y<b.y+b.h);
   menuMusicSoon(!!b); // clicking a button (mute, volume, wipe...) never auto-starts the tutorial
   if(b){ensureAudio();sfx('click');b.fn();}
 });
 addEventListener('keydown',e=>{
-  menuMusicSoon(['Minus','Equal','Escape'].includes(e.code));
+  lastInput=performance.now();
+  menuMusicSoon(['Minus','Equal','Escape'].includes(e.code)||LS.on);
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();
   keys[e.code]=true;
   if(modal){
@@ -2845,6 +3407,8 @@ addEventListener('keydown',e=>{
   if(state==='menu'){
     if(e.code==='Minus')setVol(vol-1);
     if(e.code==='Equal')setVol(vol+1);
+    if(LS.on)lsKey(e);
+    else if((e.code==='Enter'||e.code==='Space')&&!firstVisit())openLevels(); // first visit: any key starts the tutorial instead
     return;
   }
   if(e.code==='Escape'){

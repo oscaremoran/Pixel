@@ -9,7 +9,7 @@ Open `pixel.html` in any modern browser; no install or build step.
 - Level editor: build your own levels on a timeline of attacks
 - Extras: skins and trails, volume, audio offset (for Bluetooth headphones), reduce flashing & shake
 - Secrets. Poke around.
-- Controls: click a level to play; arrows/WASD to move, Esc to pause
+- Controls: click PLAY and pick a level (or Enter, then arrows); arrows/WASD to move, Esc to pause
 
 ## Tests
 

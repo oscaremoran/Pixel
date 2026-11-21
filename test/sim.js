@@ -195,6 +195,196 @@ print('secret: LAIROTUT (start the tutorial 5 times in a row)');
   toMenu();
 }
 
+print('secret: MIRROR (click your equipped skin in the Locker 5 times)');
+{
+  toMenu();
+  levelSong(SECRET_MIRROR.songId, SECRET_MIRROR.music);
+  openExtras(); openLocker();
+  const skinX = 8 + SKINS.findIndex(k => k.id === curSkin().id) * 44 + 20;
+  for (let n = 1; n <= 4; n++) clickAt(skinX, 45);
+  check(LK.on && LK.pokes === 4, '4 pokes: still in the Locker, skin wobbling');
+  clickAt(skinX, 45);
+  check(G && G.li === 'mirror' && G.tip.text === 'SECRET 4 FOUND!', 'the 5th poke starts MIRROR with SECRET 4 FOUND!');
+  const r = runOn(wander);
+  check(r.end === 'win' && r.dropped === 0, `plays to the end (${r.seconds.toFixed(0)}s)`);
+  // standing in the middle means meeting yourself
+  toMenu(); playSecret('mirror'); actx.currentTime += 3; update(1 / FPS);
+  for (let j = 0; j < 40; j++) { P.x = W / 2; P.y = H / 2; P.inv = 0; actx.currentTime += 1 / FPS; update(1 / FPS); if (state !== 'play' || P.hp < MAX_HP) break; }
+  check(P.hp < MAX_HP && G.lastHit === 'mirror', 'standing in the middle of the screen walks you into the mirror');
+  toMenu();
+}
+
+print('secret: DRIFT (leave the main menu alone for 45 s)');
+{
+  toMenu();
+  levelSong(SECRET_DRIFT.songId, SECRET_DRIFT.music);
+  lastInput = performance.now() - 30000; draw(0);
+  check(state === 'menu', 'after 30 s idle: still on the menu (shapes drifting in)');
+  lastInput = performance.now() - 46000; draw(0);
+  check(G && G.li === 'drift' && G.tip.text === 'SECRET 5 FOUND!', 'after 45 s idle: DRIFT starts with SECRET 5 FOUND!');
+  const looks = [];
+  const r = runOn((t, f) => { wander(t, f); if (looks[looks.length - 1] !== G.L.color) looks.push(G.L.color); });
+  check(r.end === 'win' && r.dropped === 0, `plays to the end (${r.seconds.toFixed(0)}s)`);
+  check(looks.join() === LEVELS.map(L => L.color).join(), 'it becomes EASY, NORMAL, HARD, HARDER, INSANE, EXTREME in order');
+  toMenu();
+  draw(0);
+  check(state === 'menu', 'coming back to the menu resets the idle clock (no instant re-trigger)');
+}
+
+print('secret: GARY (swat the fly on the menu)');
+{
+  toMenu();
+  levelSong(SECRET_GARY.songId, SECRET_GARY.music);
+  MENU_FLY.next = 0; MENU_FLY.t0 = -1;
+  draw(0);
+  check(MENU_FLY.next > performance.now() && !menuFly(performance.now()), 'no fly at first (it waits 15-30 s)');
+  MENU_FLY.next = performance.now() - 1;
+  draw(0);
+  const f = menuFly(performance.now());
+  check(!!f, 'then a fly buzzes across the menu');
+  MENU_FLY.t0 = performance.now() - 3500; // half-way: it lands for a moment
+  const a1 = menuFly(performance.now()); MENU_FLY.t0 -= 500; const a2 = menuFly(performance.now());
+  check(a1.landed && a2.landed && a1.x === a2.x && a1.y === a2.y, 'it lands and sits still for a moment');
+  check(clickAt(a2.x, a2.y) && G && G.li === 'gary' && G.tip.text === 'SECRET 6 FOUND!', 'clicking it starts GARY with SECRET 6 FOUND!');
+  const said = new Set(), seen = new Set();
+  const r = runOn((t, fr) => {
+    wander(t, fr);
+    if (G.say) said.add(G.say.text);
+    for (const h of G.haz) {
+      if (h.fly) seen.add('flies');
+      if (h.type === 'paper') seen.add('paper');
+      if (h.gapW) seen.add('gap rings');
+      if (h.type === 'dashwarn') seen.add('dives');
+      if (h.type === 'rect' && h.w === 170) seen.add('swatter');
+      if (h.type === 'mark' && h.r === 16) seen.add('eggs');
+    }
+    if (G.dark && t >= G.dark.t0 && t < G.dark.t1) seen.add('lights out');
+  });
+  check(r.end === 'win' && r.dropped === 0, `plays to the end (${r.seconds.toFixed(0)}s, ${r.dropped} dropped)`);
+  const all = ['flies', 'paper', 'gap rings', 'dives', 'swatter', 'eggs', 'lights out'];
+  check(all.every(x => seen.has(x)), 'every mechanic shows up: ' + all.filter(x => seen.has(x)).join(', '));
+  check(said.has('OI! YOU TRIED TO SWAT ME.') && said.has("THIS IS MY FINAL FORM. ...IT'S THE SAME FORM. I'M A FLY.") && said.size >= 8,
+    `he talks (${said.size} different lines, intro to final drop)`);
+  check(msg && msg.sub === 'GARY: FINE. YOU WIN.', 'and has the last word when you win');
+
+  // mechanics, one at a time
+  toMenu(); playSecret('gary'); actx.currentTime += 3; update(1 / FPS);
+  G.haz = [{type: 'paper', x: 0, y: 0, w: W, h: H, t0: 0, t1: 1e9}];
+  P.x = 100; keys.ArrowRight = true; actx.currentTime += .5; update(.5); keys.ArrowRight = false;
+  check(Math.abs(P.x - 100 - 280 / 3 * .5) < 1, 'fly paper slows you to a third');
+  G.haz = []; boss.x = 200; boss.y = 300; boss.tw = null; G.nextDart = 1e9; P.inv = 0;
+  G.haz.push({type: 'ring', x: 480, y: 300, r0: 100, vr: 0, th: 8, rMax: 1200, t0: G.t, dmg: true, gapA: 0, gapW: .42});
+  P.x = 580; P.y = 300; actx.currentTime += 1 / FPS; update(1 / FPS);
+  const inGapHp = P.hp;
+  P.x = 480; P.y = 400; actx.currentTime += 1 / FPS; update(1 / FPS);
+  check(inGapHp === MAX_HP && P.hp === MAX_HP - 1, 'a buzz ring only misses you in its gap');
+  // fairness: wherever you and Gary are (even on fly paper or in the dark), the gap is reachable before the ring arrives
+  {
+    let worst = 0;
+    for (let n = 0; n < 3000; n++) {
+      G.haz = []; G.dark = null; P.inv = 99;
+      boss.x = 60 + Math.random() * (W - 120); boss.y = 60 + Math.random() * (H - 120);
+      P.x = 20 + Math.random() * (W - 40); P.y = 20 + Math.random() * (H - 40);
+      const slow = Math.random() < .5, dark = Math.random() < .3;
+      if (slow) G.haz.push({type: 'paper', x: P.x - 50, y: P.y - 50, w: 100, h: 100, t0: 0, t1: 1e9});
+      if (dark) G.dark = {t0: 0, t1: 1e9};
+      G.ctx = {s: n, n: 0}; G.rng = mulberry(n);
+      const before = G.ev.length; PAT.buzz(0, G.t, .9); G.ev.splice(before).forEach(e => e.fn());
+      for (const h of G.haz) if (h.gapW) {
+        const d = Math.hypot(P.x - h.x, P.y - h.y), off = Math.abs(((Math.atan2(P.y - h.y, P.x - h.x) - h.gapA) % TAU + 3 * Math.PI) % TAU - Math.PI);
+        const travel = Math.max(0, off - h.gapW) * d, time = Math.max(0, (d - 20) / h.vr), can = time * (slow ? 280 / 3 : 280);
+        worst = Math.max(worst, can > 0 ? travel / can : travel > 0 ? Infinity : 0);
+      }
+    }
+    check(worst < .65, `3000 random rings: the gap never needs more than ${(worst * 100).toFixed(0)}% of the movement you have time for`);
+  }
+  check(G.say && G.say.text.length > 0 && GARY_LINES.hit.some(fn => fn(curSkin().name) === G.say.text), 'getting hit makes him gloat: "' + G.say.text + '"');
+  P.hp = 1; P.inv = 0; boss.x = P.x; boss.y = P.y; actx.currentTime += 1 / FPS; update(1 / FPS);
+  check(state === 'dead' && msg.lines.includes('GOING TO GO LAND ON SOMETHING GROSS NOW.'), 'dying gets his parting line');
+  toMenu();
+}
+
+print('menu: GD-style PLAY button and level picker');
+{
+  for (const k in localStorage) delete localStorage[k];
+  localStorage.pixel_tut_done = '1';
+  toMenu(); LS.on = false; sel = 0;
+  check(clickAt(LW / 2, 100) && LS.on && state === 'menu', 'the big PLAY button opens the level picker');
+  check(LS.i === 0, 'it opens on EASY');
+  clickAt(LW - 22, 70);
+  check(LS.i === 1, 'the right arrow goes to NORMAL');
+  clickAt(22, 70); clickAt(22, 70);
+  check(LS.i === 5, 'the left arrow wraps around to EXTREME');
+  clickAt(160, 60);
+  check(modal && modal.title === 'LOCKED' && !G, 'clicking a locked level says LOCKED');
+  modal = null;
+  clickAt(LW / 2 - 25 + 2 * 10, 178);
+  check(LS.i === 2, 'clicking a page dot jumps to that level');
+  lsGo(-2);
+  levelSong(0); // composed ahead so the click starts it at once
+  clickAt(160, 60);
+  check(state === 'play' && G.li === 0, 'clicking the card plays the level');
+  toMenu();
+  check(LS.on && state === 'menu', 'leaving a level comes back to the picker');
+  clickAt(LW / 2, 158);
+  check(PR.on && PR.li === 0, 'its PRACTICE button opens practice for that level');
+  closePractice();
+  check(LS.on, 'leaving practice comes back to the picker');
+  lsKey({code: 'ArrowRight'});
+  check(LS.i === 1, 'arrow keys browse');
+  lsKey({code: 'Escape'});
+  check(!LS.on && state === 'menu', 'Esc goes back to the main menu');
+  check(clickAt(LW / 2 - 72, 100) && LK.on, 'the button left of PLAY opens the Locker');
+  closeLocker();
+  check(clickAt(LW / 2 + 72, 100) && ED.on, 'the button right of PLAY opens the editor');
+  backFromSub();
+  check(state === 'menu' && !ED.on, 'and BACK returns to the main menu');
+}
+
+print('editor layout');
+{
+  const kinds = ATK_ROWS.flat().map(a => a[0]);
+  check(kinds.length === ATK.length - 2 && new Set(kinds).size === kinds.length && ATK_ROWS.every(r => r.length <= 5),
+    `the attack palette shows all ${kinds.length} attacks once, grouped by level, at most 5 per row`);
+  check(MUSIC.every((M, i) => Math.ceil(songInfo({track: i}).nb / 2) * 16 <= 312), 'every song\'s timeline fits in two rows without scrolling');
+  customLevels = []; openExtras(); openEditor(); newLevel();
+  const lv = ED.lv, per = Math.ceil(lv.blocks.length / 2), x0 = Math.round((LW - per * 16) / 2);
+  clickAt(x0 + 3 * 16 + 5, 40);
+  check(ED.sel === 3, 'clicking a timeline box selects it');
+  clickAt(40 + 2, 96 + 4);
+  check(lv.blocks[3] === ATK_ROWS[0][0][0] && ED.sel === 4, 'clicking an attack fills the box and moves to the next');
+  clickAt(278 + 5, 82);
+  check(lv.blocks[4] === 'rest' && ED.sel === 5, 'REST fills a box with nothing');
+  clickAt(x0 + 3 * 16 + 5, 40); clickAt(236 + 5, 82);
+  check(lv.blocks[3] === 'auto', 'AUTO clears a box back to the game\'s pick');
+  clickAt(x0 + 5, 60);
+  check(ED.sel === per, 'the second row continues the timeline');
+  // the explainer line: hover an attack, then the gap next to it, then the gap under it
+  const said = () => { draw(0); return ED.info && ED.info[0]; };
+  mouse.x = 40 + 10; mouse.y = 96 + 5;
+  const hint = said();
+  check(hint && hint.startsWith(ATK_ROWS[0][0][1] + ' - '), 'hovering an attack explains it: "' + hint + '"');
+  mouse.x = 40 + 53; check(said() === hint, 'the gap beside it keeps the explanation (no flicker)');
+  mouse.x = 40 + 10; mouse.y = 96 + 11; check(said() === hint, 'the gap below it too');
+  mouse.x = 160; mouse.y = 92; check(said() === hint, 'and the space between the explainer line and the attacks');
+  mouse.x = mouse.y = -1;
+  check(!clickAt(200, 10) || ED.screen === 'edit', 'there is no TEST button any more');
+  check(clickAt(218 + 5, 8) && ED.screen === 'settings', 'SETTINGS opens the settings screen');
+  clickAt(164 + 6 * 10 + 4, 104);
+  check(lv.speed === 7, 'the SPEED slider sets 7 when you click its 7th step');
+  clickAt(164 + 4 * 10 + 4, 128);
+  check(lv.dens === 5, 'the BULLETS slider works the same');
+  clickAt(164 + 2 * 50 + 10, 152);
+  check(lv.pace === 2, 'PACE has a button per setting');
+  const tr = lv.track; clickAt(164 + 148 - 5, 32);
+  check(lv.track === (tr + 1) % MUSIC.length && lv.blocks.length === songInfo(lv).nb, 'SONG changes the song and resizes the timeline');
+  edKey({code: 'Escape', key: 'Escape'});
+  check(ED.screen === 'edit', 'Esc on settings goes back to the timeline');
+  ED.screen = 'list'; draw(0);
+  check(customLevels.length === 1, 'the level list draws with a level in it');
+  customLevels = []; backFromSub(); closeExtras();
+}
+
 print('song cache');
 check(songCache.size <= SONG_CACHE_MAX, `holds at most ${SONG_CACHE_MAX} songs (has ${songCache.size})`);
 
