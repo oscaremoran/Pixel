@@ -201,9 +201,9 @@ print('secret: MIRROR (click your equipped skin in the Locker 5 times)');
   levelSong(SECRET_MIRROR.songId, SECRET_MIRROR.music);
   openExtras(); openLocker();
   const skinX = 8 + SKINS.findIndex(k => k.id === curSkin().id) * 44 + 20;
-  for (let n = 1; n <= 4; n++) clickAt(skinX, 45);
+  for (let n = 1; n <= 4; n++) clickAt(skinX, LK_SKIN_Y + 15);
   check(LK.on && LK.pokes === 4, '4 pokes: still in the Locker, skin wobbling');
-  clickAt(skinX, 45);
+  clickAt(skinX, LK_SKIN_Y + 15);
   check(G && G.li === 'mirror' && G.tip.text === 'SECRET 4 FOUND!', 'the 5th poke starts MIRROR with SECRET 4 FOUND!');
   const r = runOn(wander);
   check(r.end === 'win' && r.dropped === 0, `plays to the end (${r.seconds.toFixed(0)}s)`);
@@ -313,12 +313,12 @@ print('menu: GD-style PLAY button and level picker');
   check(LS.i === 0, 'it opens on EASY');
   clickAt(LW - 22, 70);
   check(LS.i === 1, 'the right arrow goes to NORMAL');
-  clickAt(22, 70); clickAt(22, 70);
-  check(LS.i === 5, 'the left arrow wraps around to EXTREME');
+  clickAt(22, 70); clickAt(22, 70); clickAt(22, 70);
+  check(LS.i === 5, 'the left arrow wraps around past the daily to EXTREME');
   clickAt(160, 60);
   check(modal && modal.title === 'LOCKED' && !G, 'clicking a locked level says LOCKED');
   modal = null;
-  clickAt(LW / 2 - 25 + 2 * 10, 178);
+  clickAt(LW / 2 - 30 + 2 * 10, 178);
   check(LS.i === 2, 'clicking a page dot jumps to that level');
   lsGo(-2);
   levelSong(0); // composed ahead so the click starts it at once
@@ -326,10 +326,13 @@ print('menu: GD-style PLAY button and level picker');
   check(state === 'play' && G.li === 0, 'clicking the card plays the level');
   toMenu();
   check(LS.on && state === 'menu', 'leaving a level comes back to the picker');
-  clickAt(LW / 2, 158);
+  clickAt(LW / 2 + 30, 158);
   check(PR.on && PR.li === 0, 'its PRACTICE button opens practice for that level');
   closePractice();
   check(LS.on, 'leaving practice comes back to the picker');
+  clickAt(LW / 2 - 30, 158);
+  check(state === 'play' && G.li === 0, 'the PLAY button next to it plays the level');
+  toMenu();
   lsKey({code: 'ArrowRight'});
   check(LS.i === 1, 'arrow keys browse');
   lsKey({code: 'Escape'});
@@ -383,6 +386,102 @@ print('editor layout');
   ED.screen = 'list'; draw(0);
   check(customLevels.length === 1, 'the level list draws with a level in it');
   customLevels = []; backFromSub(); closeExtras();
+}
+
+print('result screens');
+{
+  for (const k in localStorage) delete localStorage[k];
+  localStorage.pixel_tut_done = '1';
+  localStorage.pixel_best_4 = 30;
+  const r1 = play(4, levelSong(4), LEVELS[4], {mortal: true});
+  const res = msg.res;
+  check(r1.end === 'dead' && res && res.kind === 'dead' && res.att === 1, 'dying shows the result screen, ATTEMPT 1');
+  check(res.hits.length === MAX_HP && res.hits.every((f, i) => f > 0 && f <= res.p / 100 + .01 && (!i || f >= res.hits[i - 1])), `it marks all ${res.hits.length} hits on the bar, in order, before where you died`);
+  check(res.best === 30 && res.newBest === (res.p > 30) && res.hint && res.hint.length === 2, `your old best (30%) and a HIT BY tip: ${res.hint && res.hint[0]}`);
+  msg.at = 0; draw(0); draw(0);
+  check(uiPrev.some(b => b.fn === retry), 'it draws, with a RETRY button');
+  retry();
+  check(G.att === 2, 'retrying counts ATTEMPT 2');
+  toMenu();
+  const fin = practiceParts(4).find(p => p.name === 'FINAL DROP');
+  startLevel(4, levelSong(4), LEVELS[4], fin.from, true, true);
+  while (state === 'play') { actx.currentTime += 1 / FPS; update(1 / FPS); }
+  check(msg.res && msg.res.practice && !msg.res.att && !msg.res.newBest && msg.res.from > .5, 'practice: no attempt count or best, the bar starts at your chosen part');
+  msg.at = 0; draw(0);
+  toMenu(); closePractice();
+  const r2 = play(0, levelSong(0), LEVELS[0]);
+  check(r2.end === 'win' && msg.res.kind === 'win' && msg.res.p === 100 && msg.res.newBest, 'clearing a level shows CLEARED! at 100% with NEW BEST');
+  msg.at = 0; draw(0);
+  toMenu();
+}
+
+print('daily challenge');
+{
+  for (const k in localStorage) delete localStorage[k];
+  localStorage.pixel_tut_done = '1';
+  const a = dailyLevel(20261121), b = dailyLevel(20261122);
+  check(a.n === 1 && a.L.name === 'DAILY 1' && b.n === 2 && b.L.name === 'DAILY 2', 'the first is DAILY 1, the next day DAILY 2');
+  check(a.date === 'NOV SAT 21', 'dates read like ' + a.date);
+  delete dailyCache[20261121];
+  const a2 = dailyLevel(20261121);
+  check(a2.L.pool.join() === a.L.pool.join() && a2.music.bpm === a.music.bpm && a2.L.color === a.L.color, 'the same date always builds the same level');
+  check(a.L.pool.join() !== b.L.pool.join(), 'a different date builds a different one');
+  const ds = [20261123, 20261124, 20261125, 20261126, 20261127, 20261128, 20261129].map(k => LEVELS[dailyLevel(k).D].name);
+  check(ds.join() === 'NORMAL,HARD,HARD,HARDER,HARDER,INSANE,INSANE', 'it ramps through the week: ' + ds.join(' '));
+  const today = dailyLevel();
+  const r = play(today.li, levelSong(today.songId, today.music), Object.assign({}, today.L));
+  check(r.end === 'win' && r.dropped === 0, `today's (${today.L.name}, plays like ${LEVELS[today.D].name}) plays to the end (${r.seconds.toFixed(0)}s, ${r.dropped} dropped)`);
+  check(dailyStreak() === 1 && msg.lines[0] === 'DAILY STREAK: 1 DAY', 'clearing it starts a 1 day streak');
+  check(xpTotal() === 0, "it doesn't count toward XP");
+  toMenu();
+  localStorage.pixel_daily_last = 20261121; localStorage.pixel_daily_streak = 4;
+  check(dailyCleared(20261122) === 5, 'clearing the next day grows the streak');
+  check(dailyCleared(20261122) === 5, 'clearing the same day twice does not');
+  check(dailyCleared(20261125) === 1, 'missing a day starts again at 1');
+  check(dailyStreak(20261127) === 0, 'and a streak you let lapse shows 0');
+  LS.on = false; openLevels(); lsGo(-1 - LS.i);
+  check(LS.i === LEVELS.length, 'the daily is the last card in the level picker');
+  draw(0); draw(0);
+  levelSong(today.songId, today.music);
+  clickAt(160, 60);
+  check(state === 'play' && G.li === today.li, 'clicking it plays today\'s daily');
+  toMenu(); LS.on = false;
+  // the archive
+  DAILY_TODAY = 20261121;
+  check(archiveKeys().length === 0, 'on day 1 the archive is empty');
+  openLevels(); lsGo(LEVELS.length - LS.i);
+  check(clickAt(LW / 2 + 30, 158) && AR.on, "the daily card's ARCHIVE button opens the archive");
+  draw(0);
+  DAILY_TODAY = 20261210;
+  check(archiveKeys().join() === [...Array(19)].map((_, i) => numKey(19 - i)).join() && archiveKeys()[0] === 20261209 && archiveKeys()[18] === 20261121,
+    'later on it lists every past daily, newest first (19 on DAILY 20)');
+  check(arPages() === 3, '7 to a page: 3 pages');
+  clickAt(LW / 2 + 40, 178);
+  check(AR.page === 1, 'the > button turns the page');
+  arKey({code: 'ArrowLeft'});
+  check(AR.page === 0, 'and arrow keys do too');
+  for (const k in localStorage) if (k.startsWith('pixel_daily')) delete localStorage[k];
+  const old = dailyLevel(archiveKeys()[1]);
+  levelSong(old.songId, old.music);
+  clickAt(290, 24 + 21 + 8);
+  check(state === 'play' && G.li === old.li, `PLAY on a row plays that day (${old.L.name})`);
+  runOn(null);
+  check(state === 'win' && msg.lines[0] === 'FROM THE ARCHIVE - NO STREAK' && dailyStreak() === 0, "clearing an old daily doesn't touch the streak");
+  check(best(old.li) === 100, 'but it does save your best for that day');
+  toMenu();
+  check(AR.on, 'leaving the level comes back to the archive');
+  arKey({code: 'Escape'});
+  check(!AR.on && LS.on, 'Esc goes back to the picker');
+  LS.on = false; DAILY_TODAY = 0;
+}
+
+print('leaving the window');
+{
+  setVol(10); muted = false;
+  setAway(true);
+  check(outGain() === 0 && !muted, 'leaving the window silences everything without touching your mute setting');
+  setAway(false);
+  check(outGain() === 1, 'coming back brings the sound back at your volume');
 }
 
 print('song cache');

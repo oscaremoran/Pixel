@@ -13,7 +13,7 @@ var ctx2 = new Proxy({
   getImageData: (x, y, w, h) => ({data: new Uint8ClampedArray(w * h * 4)}),
   putImageData() {},
 }, {get: (o, k) => k in o ? o[k] : () => {}, set: (o, k, v) => { o[k] = v; return true; }});
-var document = {getElementById: () => ({
+var document = {hidden: false, hasFocus: () => true, addEventListener() {}, getElementById: () => ({
   getContext: () => ctx2, style: {}, addEventListener() {}, width: 640, height: 400,
   getBoundingClientRect() { return {}; },
 })};

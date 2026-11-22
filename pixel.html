@@ -217,7 +217,13 @@ const skillName=n=>SKILL_NAMES[Math.min(9,Math.floor(n/10))];
 // every sound goes through masterOut, so mute is one switch
 let muted=localStorage.pixel_muted==='1',masterOut=null;
 let vol=localStorage.pixel_vol!=null?+localStorage.pixel_vol:10; // 0..10
-const outGain=()=>muted?0:Math.pow(vol/10,1.6);
+// away = the window is in the background: silent until you come back (doesn't touch your mute setting)
+let away=false;
+const outGain=()=>muted||away?0:Math.pow(vol/10,1.6);
+function setAway(a){
+  away=a;
+  applyVol();
+}
 function applyVol(){
   if(masterOut)masterOut.gain.setValueAtTime(outGain(),actx.currentTime);
 }
@@ -1109,11 +1115,13 @@ function startLevel(li,song,L=LEVELS[li],from=0,test=false,practice=false){
     shake:0,flash:0,hitFlash:0,pulse:0,                               // screen effects
     hpInt:0,hpT:from,                                                 // hearts x seconds, for the skill score
     pull:null,invert:null,cap:400,nBul:0,holdUntil:0,tagged:0,tip:null,lastHit:null,
+    hits:[],                                                          // when you got hit (for the result screen)
     fin:false,finaleT:lastDrop>=0?an.beats[lastDrop].t:an.dur*.75,   // the final drop
   };
   P={x:W/2,y:H-90,hp:MAX_HP,inv:0};
   boss={x:W/2,y:200,rot:0,pulse:0,z:0,tw:null,dead:false};
   if(!L.tut)localStorage.pixel_tut_streak=0;
+  if(!L.tut&&!test&&!practice)localStorage['pixel_att_'+li]=G.att=(+localStorage['pixel_att_'+li]||0)+1; // GD-style attempt counter
   if(L.init)L.init();
   msg=null;
   state='play';
@@ -1126,6 +1134,7 @@ function hurt(src){
   P.hp--;
   if(G.L.onHurt)G.L.onHurt();
   G.lastHit=(src&&src.pat)||G.pat;
+  G.hits.push(G.t);
   P.inv=1.6;
   G.shake=14;
   G.hitFlash=1;
@@ -1155,7 +1164,7 @@ function die(){
   gain.gain.linearRampToValueAtTime(0,now+1);
   const s=src;
   setTimeout(()=>{if(src===s)stopSong();},1100);
-  const p=pct();
+  const p=pct(),b0=best(G.li);
   saveBest(p);
   const sk=skillScore(p),prevSk=bestSkill(G.li),xp0=xpTotal();
   saveSkill(sk);
@@ -1165,6 +1174,12 @@ function die(){
   msg=G.practice
     ?{at:performance.now()+900,title:'YOU DIED',sub:`PRACTICE  ${G.L.name}  ${p}%`,lines:hint,btns:[['RETRY',retry],['BACK',toMenu]]}
     :{at:performance.now()+900,title:'YOU DIED',sub:`${G.L.name}  ${p}%  BEST ${best(G.li)}%`,meter:{n:sk,prev:prevSk},lines:[...ul,...(G.L.deathLines||[]),...hint],btns:[['RETRY',retry],[backLabel(),toMenu]]};
+  msg.res=resultInfo('dead',p,b0,sk,prevSk,G.practice?[]:[...ul,...(G.L.deathLines||[])],hb);
+}
+// what the result screen shows: where you got hit (as fractions of the song), your best before this run
+function resultInfo(kind,p,b0,sk,prevSk,lines,hb){
+  return{kind,p,best:b0,newBest:!G.practice&&!G.test&&p>b0,sk,prevSk,hits:G.hits.map(t=>t/G.dur),
+    from:G.from/G.dur,att:G.att||0,lines,hint:hb||null,practice:G.practice};
 }
 function win(){
   state='win';
@@ -1177,16 +1192,20 @@ function win(){
   burst(boss.x,boss.y,'#ffffff',60,350);
   G.shake=25;
   G.flash=1;
+  const b0=best(G.li);
   saveBest(100);
   const sk=skillScore(100),prevSk=bestSkill(G.li),xp0=xpTotal();
   saveSkill(sk);
   const ul=unlockLines(xp0);
+  if(G.L.onWin&&!G.practice&&!G.test)G.L.onWin();
   if(G.practice){
     msg={at:performance.now()+1600,title:'CLEARED!',sub:'PRACTICE - NOTHING IS SAVED',btns:[['AGAIN',retry],['BACK',toMenu]]};
+    msg.res=resultInfo('win',100,b0,sk,prevSk,[],null);
     return;
   }
   msg={at:performance.now()+1600,title:G.L.tut?'TUTORIAL DONE':'CLEARED!',sub:G.L.tut?'SKILL = HOW FAR YOU GET + HOW FEW HITS':G.L.winSub||'',
     meter:{n:sk,prev:prevSk},lines:[...(G.L.winLines||[]),...ul],btns:G.L.tut?[['PLAY EASY',()=>{toMenu();playLevel(0);}],['MENU',toMenu]]:[['AGAIN',retry],[backLabel(),toMenu]]};
+  if(!G.L.tut)msg.res=resultInfo('win',100,b0,sk,prevSk,msg.lines,null);
 }
 // where the result screen's second button goes: the editor for test runs, the practice list, or the menu
 const backLabel=()=>G.practice?'BACK':G.test?'EDIT':'MENU';
@@ -1474,9 +1493,10 @@ function draw(dt){
     else if(PR.on)drawPractice();
     else if(LK.on)drawLocker();
     else if(XT.on)drawExtras();
+    else if(AR.on)drawArchive();
     else if(LS.on)drawLevels();
     else drawMenu();
-    if(state==='loading'){ui=[];drawBox('LOADING',loadMsg,[],LEVELS[sel].color);} // nothing behind the box is clickable while a song composes
+    if(state==='loading'){ui=[];drawBox('LOADING',loadMsg,[],(LEVELS[sel]||LEVELS[0]).color);} // nothing behind the box is clickable while a song composes
     if(modal){
       ui=[];
       drawBox(modal.title,modal.sub,modal.btns,modal.col||'#ffffff');
@@ -1488,7 +1508,7 @@ function draw(dt){
   drawGame(dt);
   if(G.L.postFx&&state==='play'&&!calmFx)G.L.postFx();
   const boxUp=msg&&performance.now()>=msg.at;
-  if(boxUp)drawBox(msg.title,msg.sub,msg.btns,G.L.color,msg.lines,msg.meter);
+  if(boxUp)msg.res?drawResult(msg):drawBox(msg.title,msg.sub,msg.btns,G.L.color,msg.lines,msg.meter);
   posterize(G.L.pal);
   if(!boxUp&&G.L.drawPost)G.L.drawPost();
   if(!boxUp&&(state==='play'||state==='paused'))drawPlayerPost();
@@ -1943,6 +1963,68 @@ function drawBox(title,sub,btns,col,lines=[],meter=null){
   const bw=50,tot=btns.length*bw+(btns.length-1)*6;
   btns.forEach(([l,f],i)=>btn((LW-tot)/2+i*(bw+6)|0,y+54+extra,bw,14,l,col,f));
 }
+// GD-style death / win screen: big percentage, a progress bar that fills to where you got,
+// marks where you were hit and your previous best, then what hit you and the buttons. Animates in over 0.6 s.
+function drawResult(m){
+  const r=m.res,L=G.L,col=L.color,dead=r.kind==='dead',age=(performance.now()-m.at)/1000,e=clamp(age/.6),ease=1-(1-e)*(1-e);
+  const n=r.lines.length,w=264,h=86+(r.hint?24:0)+n*9+32,x=(LW-w)/2|0,y=(LH-h)/2|0,t=performance.now()/1000;
+  ctx.globalAlpha=.6;
+  ctx.fillStyle='#000000';
+  ctx.fillRect(0,0,LW,LH);
+  ctx.globalAlpha=1;
+  ctx.fillRect(x,y,w,h);
+  frame(x,y,w,h,col);
+  frame(x+2,y+2,w-4,h-4,col);
+  // title: a death shudders, a clear drops in
+  const xo=dead?Math.round(Math.sin(age*60)*(1-clamp(age/.3))*3):0,yo=dead?0:Math.round((1-ease)*-12);
+  txt(dead?'YOU DIED':'CLEARED!',LW/2+xo,y+8+yo,col,3,1);
+  txt((r.practice?'PRACTICE  ':'')+L.name+(r.att?'   ATTEMPT '+r.att:''),LW/2,y+27,'#ffffff',1,1);
+  // the percentage counts up with the bar
+  const shown=Math.round(lerp(r.practice?Math.round(r.from*100):0,r.p,ease))+'%';
+  txt(shown,LW/2,y+37,'#ffffff',3,1);
+  if(r.newBest&&e>=1&&Math.floor(t*3)%2)txt('NEW BEST!',LW/2+tw(shown,3)/2+6,y+43,col);
+  // the song bar
+  const bx=x+20,bw=w-40,by=y+57,bh=8,X=f=>bx+1+Math.round(clamp(f)*(bw-2)),fill=lerp(r.practice?r.from:0,r.p/100,ease),dark=mix(L.bg,L.color,.14);
+  ctx.fillStyle='#000000';
+  ctx.fillRect(bx,by,bw,bh);
+  frame(bx,by,bw,bh,L.dim);
+  ctx.fillStyle=dark; // the rest of the song
+  ctx.fillRect(X(0),by+1,X(1)-X(0),bh-2);
+  const a=r.practice?r.from:0;
+  if(fill>a){ // how far you got
+    ctx.fillStyle=col;
+    ctx.fillRect(X(a),by+1,X(fill)-X(a),bh-2);
+  }
+  if(r.best>0&&!r.practice){ // your best before this run
+    const bxp=X(r.best/100);
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(bxp,by-2,1,bh+4);
+    txt('BEST',bxp,by+bh+3,'#ffffff',1,bxp<bx+12?0:bxp>bx+bw-12?2:1);
+  }
+  ctx.fillStyle=L.warn; // where you got hit
+  for(const f of r.hits)if(f<=fill+.001){
+    const hx=X(f);
+    ctx.fillRect(hx-1,by-4,3,2);
+    ctx.fillRect(hx,by-2,1,2);
+  }
+  // stats
+  const stats=[`HITS ${r.hits.length}`];
+  if(!r.practice)stats.push(`SKILL ${r.sk} ${skillName(r.sk)}`+(r.sk>r.prevSk&&r.prevSk?` (UP FROM ${r.prevSk})`:''));
+  else stats.push('PRACTICE - NOTHING IS SAVED');
+  txt(stats.join('     '),LW/2,y+74,'#ffffff',1,1);
+  let cy=y+86;
+  if(r.hint){ // what got you, and how to dodge it
+    frame(x+12,cy,w-24,20,L.warn);
+    txt('HIT BY: '+r.hint[0],LW/2,cy+4,L.warn,1,1);
+    txt(r.hint[1],LW/2,cy+12,'#ffffff',1,1);
+    cy+=24;
+  }
+  r.lines.forEach((l,i)=>txt(l,LW/2,cy+i*9,i?'#ffffff':col,1,1));
+  cy+=n*9+2;
+  const bw2=70;
+  m.btns.forEach(([l,f],i)=>btn(LW/2-bw2-3+i*(bw2+6),cy,bw2,16,l,col,f));
+  txt('R TO RETRY   ESC FOR MENU',LW/2,cy+21,L.mid,1,1);
+}
 function drawMenu(){
   const t=performance.now()/1000;
   ctx.fillStyle=MENU_BG;
@@ -2014,6 +2096,19 @@ function drawMenu(){
     }
   }
 }
+// a crisp pixel-art triangle pointing right (dir 1) or left (dir -1), th rows tall (odd), centred on y.
+// x is the flat side. outline = a 1 px black border plus a little shadow.
+function pixTri(x,y,th,dir,col,outline=true){
+  const mid=(th-1)/2,len=Math.round(th*.86),row=(ox,oy,c)=>{
+    ctx.fillStyle=c;
+    for(let r=0;r<th;r++){
+      const n=Math.max(1,Math.round((1-Math.abs(r-mid)/(mid+1))*len));
+      ctx.fillRect(dir>0?ox:ox-n+1,oy-mid+r,n,1);
+    }
+  };
+  if(outline)for(const [dx,dy] of [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1],[2,2]])row(x+dx,y+dy,'#000000');
+  row(x,y,col);
+}
 // the main menu's PLAY button, as crisp pixel art: a rounded green tile with a bevel ring and a white play triangle.
 // It grows 2 px on hover; on the menu music's beat the ring flashes instead of the button changing size.
 function drawPlayBtn(cx,cy,pulse){
@@ -2028,15 +2123,8 @@ function drawPlayBtn(cx,cy,pulse){
   tile(x,y,w,'#000000'); // outline
   tile(x+2,y+2,w-4,pulse||hov&&Math.floor(t*4)%2?'#ffffff':mix(MENU_BG,G,.3)); // bevel ring
   tile(x+4,y+4,w-8,G);
-  // the triangle, one pixel row at a time; nudged right so it looks centred
-  const tri=(th,ox,oy,col)=>{
-    ctx.fillStyle=col;
-    const mid=(th-1)/2,len=Math.round(th*.86);
-    for(let r=0;r<th;r++)ctx.fillRect(ox,oy+r,Math.max(1,Math.round((1-Math.abs(r-mid)/(mid+1))*len)),1);
-  };
-  const th=Math.round(w*.46)|1,tx=cx-Math.round(th*.86/2)+2,ty=cy-(th-1)/2;
-  for(const [dx,dy] of [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1],[2,2]])tri(th,tx+dx,ty+dy,'#000000'); // even 1 px outline + a little shadow
-  tri(th,tx,ty,'#ffffff');
+  const th=Math.round(w*.46)|1;
+  pixTri(cx-Math.round(th*.86/2)+2,cy,th,1,'#ffffff'); // nudged right so it looks centred
   ui.push({x:cx-s/2,y:cy-s/2,w:s,h:s,fn:openLevels});
 }
 // a big square menu button centred on (cx,cy). It grows on hover; icon(half,hovered) draws on top.
@@ -2056,9 +2144,10 @@ function bigBtn(cx,cy,s,col,fn,grow,icon){
 const LS={on:false,i:0,dir:0,t0:0};
 function openLevels(){LS.on=true;LS.i=sel;LS.dir=0;}
 function closeLevels(){LS.on=false;lastInput=performance.now();}
+const LS_N=()=>LEVELS.length+1; // the main levels, then the daily challenge
 function lsGo(d){
-  LS.i=(LS.i+d+LEVELS.length)%LEVELS.length;
-  sel=LS.i;
+  LS.i=(LS.i+d+LS_N()*2)%LS_N();
+  if(LS.i<LEVELS.length)sel=LS.i;
   LS.dir=Math.sign(d);
   LS.t0=performance.now();
 }
@@ -2066,8 +2155,10 @@ function lsGo(d){
 function lsKey(e){
   if(e.code==='ArrowLeft'||e.code==='KeyA')lsGo(-1);
   if(e.code==='ArrowRight'||e.code==='KeyD')lsGo(1);
-  if(e.code==='Enter'||e.code==='Space')playLevel(LS.i);
-  if(e.code==='KeyP')openPractice(LS.i);
+  const daily=LS.i===LEVELS.length;
+  if(e.code==='Enter'||e.code==='Space')daily?playDaily():playLevel(LS.i);
+  if(e.code==='KeyR'&&daily)openArchive();
+  if(e.code==='KeyP'&&!daily)openPractice(LS.i);
   if(e.code==='Escape')closeLevels();
 }
 // a GD-style progress bar: label, bar, value
@@ -2082,7 +2173,7 @@ function lsBar(y,label,f,val,col){
   txt(val,276,y+1,'#ffffff',1,2);
 }
 function drawLevels(){
-  const t=performance.now()/1000,i=LS.i,L=LEVELS[i],open=levelOpen(i),col=open?L.color:'#3a3a4a',dim=mix(MENU_BG,L.color,.3);
+  const t=performance.now()/1000,i=LS.i,daily=i===LEVELS.length,Dl=daily?dailyLevel():null,L=daily?Dl.L:LEVELS[i],open=daily||levelOpen(i),col=open?L.color:'#3a3a4a',dim=mix(MENU_BG,L.color,.3);
   ctx.fillStyle=MENU_BG;
   ctx.fillRect(0,0,LW,LH);
   // the level's shape, big and dim, turning slowly behind everything
@@ -2092,7 +2183,7 @@ function drawLevels(){
     ctx.fill();
   }
   btn(4,4,34,12,'BACK','#ffffff',closeLevels);
-  txt('LEVEL '+(i+1)+'/'+LEVELS.length,LW/2,8,'#ffffff',1,1);
+  txt(daily?'DAILY CHALLENGE':'LEVEL '+(i+1)+'/'+LEVELS.length,LW/2,8,'#ffffff',1,1);
   // the card slides in from the side you browsed toward
   const u=clamp((performance.now()-LS.t0)/180),off=Math.round(LS.dir*(1-u)*(1-u)*90);
   const x=44+off,y=24,w=232,h=92,hov=mouse.x>=44&&mouse.x<44+w&&mouse.y>=y&&mouse.y<y+h;
@@ -2104,50 +2195,154 @@ function drawLevels(){
   ctx.fillStyle=col;
   poly(shapePts(L,22,t*(hov?2:.5)),x+38,y+46);
   ctx.fill();
-  if(open){
+  if(daily){
+    const left=Math.max(0,(new Date().setHours(24,0,0,0)-Date.now())/1000|0);
+    txt(L.name,x+72,y+16,col,3);
+    txt(Dl.date,x+72,y+38,'#ffffff',2);
+    txt('PLAYS LIKE '+LEVELS[Dl.D].name+'   '+Dl.music.bpm+' BPM',x+72,y+54,col);
+    txt(`NEW LEVEL IN ${left/3600|0}H ${(left/60|0)%60}M`,x+72,y+64,dim);
+    if(best(Dl.li)>=100)txt('CLEARED!',x+w-8,y+8,col,1,2);
+  }else if(open){
     txt(L.name,x+72,y+16,col,3);
     txt(L.shape,x+72,y+38,'#ffffff',2);
     txt(MUSIC[i].bpm+' BPM',x+72,y+54,col);
     if(best(i)>=100)txt('CLEARED!',x+w-8,y+8,col,1,2);
-    txt(hov?'CLICK TO PLAY':'',x+72,y+74,Math.floor(t*3)%2?'#ffffff':col);
   }else{
     padlock(x+35,y+42,'#ffd23f');
     txt(L.name,x+72,y+16,col,3);
     txt(LEVEL_XP[i]+' XP TO UNLOCK',x+72,y+40,'#ffffff');
     txt('YOU HAVE '+xpTotal(),x+72,y+50,col);
   }
-  ui.push({x:44,y,w,h,fn:()=>playLevel(i)});
-  // arrows
+  ui.push({x:44,y,w,h,fn:daily?()=>playDaily():()=>playLevel(i)});
+  // arrows: always visible in the level's colour; hovering turns them white and nudges them outward
   const arrow=(ax,d)=>{
-    const ahov=mouse.x>=ax-16&&mouse.x<ax+16&&mouse.y>=y+h/2-24&&mouse.y<y+h/2+24,bob=Math.round(Math.sin(t*4)*1.5)*d,c=ahov?'#ffffff':'#3a3a4a';
-    for(const [dx,cc] of [[2,'#000000'],[0,c]]){
-      ctx.fillStyle=cc;
-      ctx.beginPath();
-      ctx.moveTo(ax+bob+dx-d*8,y+h/2-14+dx);
-      ctx.lineTo(ax+bob+dx+d*8,y+h/2+dx);
-      ctx.lineTo(ax+bob+dx-d*8,y+h/2+14+dx);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ui.push({x:ax-16,y:y+h/2-24,w:32,h:48,fn:()=>lsGo(d)});
+    const zx=ax-16,zy=y+h/2-24,ahov=hovIn(zx,zy,32,48),th=23;
+    pixTri(ax-d*10+(ahov?d*2:0),y+h/2,th,d,ahov?'#ffffff':L.color);
+    ui.push({x:zx,y:zy,w:32,h:48,fn:()=>lsGo(d)});
   };
   arrow(22,-1);
   arrow(LW-22,1);
   // progress, like GD's normal / practice bars
-  if(open){
+  if(daily){
+    const st=dailyStreak();
+    lsBar(124,'TODAY',best(Dl.li)/100,best(Dl.li)+'%',col);
+    lsBar(136,'STREAK',Math.min(1,st/7),st+' DAY'+(st===1?'':'S'),col);
+    btn(LW/2-62,152,60,14,'PLAY',col,()=>playDaily());
+    btn(LW/2+2,152,60,14,'ARCHIVE',col,openArchive);
+  }else if(open){
     lsBar(124,'BEST',best(i)/100,best(i)+'%',col);
     lsBar(136,'SKILL',bestSkill(i)/100,bestSkill(i)?bestSkill(i)+' '+skillName(bestSkill(i)):'-',col);
-    btn(LW/2-30,152,60,14,'PRACTICE',col,()=>openPractice(i));
+    btn(LW/2-62,152,60,14,'PLAY',col,()=>playLevel(i));
+    btn(LW/2+2,152,60,14,'PRACTICE',col,()=>openPractice(i));
   }
   // page dots
-  LEVELS.forEach((Lj,j)=>{
-    const dx=LW/2-25+j*10;
-    ctx.fillStyle=j===i?Lj.color:levelOpen(j)?mix(MENU_BG,Lj.color,.3):'#3a3a4a';
+  [...LEVELS,dailyLevel().L].forEach((Lj,j)=>{
+    const dx=LW/2-30+j*10;
+    ctx.fillStyle=j===i?Lj.color:j===LEVELS.length||levelOpen(j)?mix(MENU_BG,Lj.color,.3):'#3a3a4a';
     if(j===i)ctx.fillRect(dx-2,176,5,5);
     else ctx.fillRect(dx-1,177,3,3);
     ui.push({x:dx-4,y:173,w:9,h:11,fn:()=>{if(j!==i)lsGo(j-i);}});
   });
-  txt('< > TO BROWSE   ENTER TO PLAY   P PRACTICE   ESC BACK',LW/2,190,'#3a3a4a',1,1);
+  txt(daily?'< > TO BROWSE   ENTER TO PLAY   R ARCHIVE   ESC BACK':'< > TO BROWSE   ENTER TO PLAY   P PRACTICE   ESC BACK',LW/2,190,'#3a3a4a',1,1);
+}
+// ---------- daily challenge: a new level every day, the same for everyone because it's built from the date ----------
+// Six attacks from any level, a random shape and colour, and one of the songs remixed (new key, scale, chords, tempo).
+// It ramps through the week: Monday plays like NORMAL, the weekend like INSANE. Doesn't count toward XP.
+const DAILY_EPOCH=Date.UTC(2026,10,21); // DAILY 1
+const DAYS=['SUN','MON','TUE','WED','THU','FRI','SAT'],MONTHS=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+const dailyKey=(d=new Date())=>d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate(); // e.g. 20261121, local time
+const keyDate=k=>new Date(Date.UTC(Math.floor(k/10000),Math.floor(k/100)%100-1,k%100));
+const keyDays=k=>Math.round((keyDate(k)-DAILY_EPOCH)/864e5);
+let DAILY_TODAY=0; // tests set this to pretend it's another day
+const todayKey=()=>DAILY_TODAY||dailyKey();
+const numKey=n=>{const d=new Date(DAILY_EPOCH+(n-1)*864e5);return d.getUTCFullYear()*10000+(d.getUTCMonth()+1)*100+d.getUTCDate();}; // DAILY n's date
+const dailyCache={};
+function dailyLevel(key=todayKey()){
+  if(dailyCache[key])return dailyCache[key];
+  const r=mulberry(Math.imul(key,2654435761)>>>0),pick=a=>a[Math.floor(r()*a.length)],n=keyDays(key)+1,day=keyDate(key).getUTCDay();
+  const D=[4,1,2,2,3,3,4][day],Lv=LEVELS[D],base=MUSIC[clamp(D-1+Math.floor(r()*3),0,5)]; // a song near its difficulty, so the tempo fits
+  const deck=ATK.slice(2).map(a=>a[0]);
+  for(let i=deck.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[deck[i],deck[j]]=[deck[j],deck[i]];}
+  const pool=deck.slice(0,6),sh=pick(SHAPES),co=pick(ED_COLORS),name='DAILY '+n;
+  const music=Object.assign({},base,{title:name,root:base.root+Math.floor(r()*7)-3,scale:pick(Object.keys(SCALES)),prog:pick(MUSIC).prog,bpm:base.bpm+Math.floor(r()*13)-6});
+  const L=prepL({name,shape:sh.label,sides:sh.sides,star:sh.star,rot0:sh.rot0,color:co.c,bg:co.bg,D,S:Lv.S,C:Lv.C,half:Lv.half,
+    sig:pool.slice(0,2),pool,calm:[pool[0],pool[2]],daily:key});
+  L.onWin=()=>{ // only today's daily counts toward the streak; archive clears are just for fun
+    if(key!==todayKey()){G.L.winLines=['FROM THE ARCHIVE - NO STREAK'];return;}
+    const s=dailyCleared(key);
+    G.L.winLines=[`DAILY STREAK: ${s} DAY${s>1?'S':''}`];
+  };
+  const d=keyDate(key);
+  return dailyCache[key]={key,n,D,L,music,li:'d'+key,songId:1000+n,date:`${MONTHS[d.getUTCMonth()]} ${DAYS[day]} ${d.getUTCDate()}`};
+}
+// clearing a daily: the streak grows if you also cleared yesterday's, else starts again at 1
+function dailyCleared(key){
+  const last=+localStorage.pixel_daily_last||0;
+  let s=+localStorage.pixel_daily_streak||0;
+  if(last===key)return s;
+  s=last&&keyDays(key)-keyDays(last)===1?s+1:1;
+  localStorage.pixel_daily_last=key;
+  localStorage.pixel_daily_streak=s;
+  return s;
+}
+// the streak still counts if your last clear was today or yesterday
+const dailyStreak=(key=todayKey())=>{const last=+localStorage.pixel_daily_last||0;return last&&keyDays(key)-keyDays(last)<=1?+localStorage.pixel_daily_streak||0:0;};
+async function playDaily(key=todayKey()){
+  if(state!=='menu')return;
+  ensureAudio();
+  const Dl=dailyLevel(key);
+  if(!songCache.has(Dl.songId)){
+    state='loading';
+    loadMsg='COMPOSING '+Dl.L.name+'...';
+    await new Promise(r=>setTimeout(r,60));
+  }
+  try{startLevel(Dl.li,levelSong(Dl.songId,Dl.music),Object.assign({},Dl.L));}catch(e){console.error(e);state='menu';}
+}
+// ---------- daily archive: every past daily, newest first, 7 to a page. Clears here don't touch the streak. ----------
+const AR={on:false,page:0},AR_ROWS=7;
+const archiveKeys=(today=todayKey())=>{const out=[];for(let n=keyDays(today);n>=1;n--)out.push(numKey(n));return out;}; // yesterday back to DAILY 1
+function openArchive(){AR.on=true;AR.page=0;}
+function closeArchive(){AR.on=false;}
+function arPages(){return Math.max(1,Math.ceil(archiveKeys().length/AR_ROWS));}
+function arKey(e){
+  if(e.code==='Escape')closeArchive();
+  if(e.code==='ArrowLeft'||e.code==='KeyA')AR.page=Math.max(0,AR.page-1);
+  if(e.code==='ArrowRight'||e.code==='KeyD')AR.page=Math.min(arPages()-1,AR.page+1);
+}
+function drawArchive(){
+  const t=performance.now()/1000,keys=archiveKeys(),pages=arPages();
+  AR.page=Math.min(AR.page,pages-1);
+  ctx.fillStyle=MENU_BG;
+  ctx.fillRect(0,0,LW,LH);
+  btn(4,4,34,12,'BACK','#ffffff',closeArchive);
+  txt('ARCHIVE',LW/2,6,'#ffffff',2,1);
+  txt('PAST DAILIES',LW-4,8,'#3a3a4a',1,2);
+  if(!keys.length){
+    txt('NOTHING HERE YET',LW/2,80,'#ffffff',2,1);
+    txt("TODAY'S DAILY SHOWS UP HERE TOMORROW",LW/2,98,'#3a3a4a',1,1);
+  }
+  keys.slice(AR.page*AR_ROWS,AR.page*AR_ROWS+AR_ROWS).forEach((k,i)=>{
+    const Dl=dailyLevel(k),L=Dl.L,c=L.color,y=24+i*21,b=best(Dl.li);
+    ctx.fillStyle='#000000';
+    ctx.fillRect(4,y,312,19);
+    frame(4,y,312,19,c);
+    ctx.fillStyle=mix(MENU_BG,c,.3); // a little tile with its shape
+    ctx.fillRect(6,y+2,15,15);
+    ctx.fillStyle=c;
+    poly(shapePts(L,6,t*(i%2?1:-1)),13,y+9);
+    ctx.fill();
+    txt(L.name,26,y+3,c,2);
+    txt(Dl.date,92,y+3,'#ffffff');
+    txt('PLAYS LIKE '+LEVELS[Dl.D].name,92,y+11,LEVELS[Dl.D].color);
+    txt(b>=100?'CLEARED!':'BEST '+b+'%',236,y+7,b>=100?c:'#ffffff',1,2);
+    btn(276,y+4,36,11,'PLAY',c,()=>playDaily(k));
+  });
+  if(pages>1){
+    btn(LW/2-50,174,12,11,'<','#ffffff',()=>{AR.page=Math.max(0,AR.page-1);});
+    txt(`PAGE ${AR.page+1}/${pages}`,LW/2,177,'#ffffff',1,1);
+    btn(LW/2+38,174,12,11,'>','#ffffff',()=>{AR.page=Math.min(pages-1,AR.page+1);});
+  }
+  txt(pages>1?'< > PAGES   ESC TO GO BACK':'ESC TO GO BACK',LW/2,190,'#3a3a4a',1,1);
 }
 // ---------- menu actions ----------
 async function playLevel(i,from=0,practice=false){
@@ -2972,7 +3167,7 @@ function drawExtras(){
   txt('ESC TO GO BACK',LW/2,190,'#3a3a4a',1,1);
 }
 // ---------- locker: pick your skin and trail ----------
-const LK={on:false};
+const LK={on:false},LK_SKIN_Y=38,LK_TRAIL_Y=112; // top of each row of 40 px tiles
 function openLocker(){LK.on=true;state='editor';ED.on=false;}
 function closeLocker(){LK.pokes=0;backFromSub();}
 function padlock(x,y,c){
@@ -3008,15 +3203,9 @@ function drawLocker(){
       }});
     });
   };
-  row(SKINS,30,'SKINS',curSkin(),id=>{localStorage.pixel_skin=id;});
-  row(TRAILS,100,'TRAILS',curTrail(),id=>{localStorage.pixel_trail=id;});
-  txt('LEVELS',8,156,'#ffffff');
-  LEVELS.forEach((L,i)=>{
-    const x=8+i*52,open=xp>=LEVEL_XP[i];
-    txt(L.name,x,166,open?L.color:'#3a3a4a');
-    txt(open?'OPEN':LEVEL_XP[i]+' XP',x,174,open?'#ffffff':'#3a3a4a');
-  });
-  txt('XP = YOUR BEST SKILL ON EACH LEVEL ADDED UP',LW/2,188,'#3a3a4a',1,1);
+  row(SKINS,LK_SKIN_Y,'SKINS',curSkin(),id=>{localStorage.pixel_skin=id;});
+  row(TRAILS,LK_TRAIL_Y,'TRAILS',curTrail(),id=>{localStorage.pixel_trail=id;});
+  txt('CLICK ONE TO WEAR IT',LW/2,182,'#3a3a4a',1,1);
 }
 function lockerPost(){
   const t=performance.now()/1000,xp=xpTotal(),R=RES;
@@ -3025,11 +3214,11 @@ function lockerPost(){
     if(xp<k.xp)return;
     // the equipped skin wobbles harder each time you poke it (MIRROR hint)
     const p=k.id===curSkin().id?LK.pokes||0:0,wx=p?Math.round(Math.sin(t*45)*p*1.5):0,wy=p?-Math.round(Math.abs(Math.sin(t*9))*p*2):0;
-    drawSkin((8+i*44+20)*R+wx,(30+18)*R+wy,k,t,'#4fc3ff',2);
+    drawSkin((8+i*44+20)*R+wx,(LK_SKIN_Y+18)*R+wy,k,t,'#4fc3ff',2);
   });
   TRAILS.forEach((k,i)=>{
     if(xp<k.xp)return;
-    const cx=(8+i*44+20)*R,cy=(100+20)*R,pts=[];
+    const cx=(8+i*44+20)*R,cy=(LK_TRAIL_Y+20)*R,pts=[];
     for(let j=13;j>=0;j--){
       const a=t*3-j*.16;
       pts.push({x:cx+Math.cos(a)*22,y:cy+Math.sin(a*1.3)*18});
@@ -3381,7 +3570,7 @@ cv.addEventListener('click',e=>{
 });
 addEventListener('keydown',e=>{
   lastInput=performance.now();
-  menuMusicSoon(['Minus','Equal','Escape'].includes(e.code)||LS.on);
+  menuMusicSoon(['Minus','Equal','Escape'].includes(e.code)||LS.on||AR.on);
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();
   keys[e.code]=true;
   if(modal){
@@ -3407,7 +3596,8 @@ addEventListener('keydown',e=>{
   if(state==='menu'){
     if(e.code==='Minus')setVol(vol-1);
     if(e.code==='Equal')setVol(vol+1);
-    if(LS.on)lsKey(e);
+    if(AR.on)arKey(e);
+    else if(LS.on)lsKey(e);
     else if((e.code==='Enter'||e.code==='Space')&&!firstVisit())openLevels(); // first visit: any key starts the tutorial instead
     return;
   }
@@ -3423,6 +3613,12 @@ addEventListener('keyup',e=>{keys[e.code]=false;});
 addEventListener('blur',()=>{
   for(const k in keys)keys[k]=false;
   pause();
+  setAway(true);
+});
+addEventListener('focus',()=>setAway(false));
+document.addEventListener('visibilitychange',()=>{ // switching tabs or minimising
+  if(document.hidden){pause();setAway(true);}
+  else if(document.hasFocus())setAway(false);
 });
 let last=performance.now();
 function loop(now){

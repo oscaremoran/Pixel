@@ -5,6 +5,7 @@ A browser rhythm bullet-dodger. Survive the song while a geometric core attacks 
 Open `pixel.html` in any modern browser; no install or build step.
 
 - 6 levels (EASY to EXTREME), each with its own procedurally composed soundtrack and signature attacks
+- Daily challenge: a new level every day (the same for everyone), harder toward the weekend; keep a streak going
 - Practice mode: start any level from any part of its song (nothing is saved)
 - Level editor: build your own levels on a timeline of attacks
 - Extras: skins and trails, volume, audio offset (for Bluetooth headphones), reduce flashing & shake
